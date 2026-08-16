@@ -1,5 +1,5 @@
 """
-ORM tables for EcoPulse — Org/Auth foundation + Layer 1 (raw ingestion).
+ORM tables for EcoPulse — Org/Auth foundation + Layer 1 (raw ingestion) + Layer 2 (cost & waste analytics).
 
 Organization    -> a company/tenant using EcoPulse (multi-tenant root)
 UserProfile     -> app-level profile for a Supabase Auth user; links a login to an org + role
@@ -8,7 +8,10 @@ GPUMetric       -> raw Layer-1 GPU telemetry ingestion (per org)
 K8sMetric       -> raw Layer-1 Kubernetes metrics ingestion (per org)
 OperationalLog  -> raw Layer-1 operational log ingestion (per org)
 
-Layer 2+ tables (waste_items, recommendations, remediation_actions, forecasts,
+Layer 2: Cost & Waste Analytics
+WasteItem       -> identified waste & cost optimization opportunities (per org)
+
+Layer 3+ tables (recommendations, remediation_actions, forecasts,
 anomalies, log_embeddings, alerts) will be added when we build those layers.
 """
 import datetime
@@ -110,3 +113,32 @@ class OperationalLog(Base):
     message = Column(Text, nullable=False)
     severity = Column(String, default="INFO")
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — Cost & Waste Analytics
+# ---------------------------------------------------------------------------
+
+class WasteItem(Base):
+    """
+    An identified waste or cost optimization opportunity.
+    Derived from BillingRecord analysis using cost & usage_hours heuristics.
+    
+    waste_type can be: "low_utilization", "high_cost_low_usage", etc.
+    severity ranges from 0.0 to 1.0 (higher = more waste)
+    """
+    __tablename__ = "waste_items"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    billing_record_id = Column(String, ForeignKey("billing_records.id"), nullable=False)
+    resource_id = Column(String, nullable=False)
+    service = Column(String, nullable=True)
+    region = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    waste_type = Column(String, nullable=False)  # e.g., "low_utilization", "high_cost_low_usage"
+    severity_score = Column(Float, nullable=False)  # 0.0 to 1.0
+    estimated_monthly_waste_usd = Column(Float, nullable=False)
+    details = Column(Text, nullable=True)  # JSON or free-form notes about the waste
+    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
+
