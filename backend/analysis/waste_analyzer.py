@@ -12,7 +12,7 @@ Key heuristics:
 All thresholds and waste percentages are configurable via strategy constants.
 """
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy.orm import Session
 
 from backend.db import models
@@ -276,4 +276,81 @@ def persist_waste_items(db: Session, org_id: str, waste_results: list[WasteAnaly
     
     db.commit()
     return count
+
+
+def filter_and_sort_waste_items(
+    db: Session,
+    org_id: str,
+    scan_type: str = "waste",
+    severity_min: float = 0.0,
+    severity_max: float = 1.0,
+    service: Optional[str] = None,
+    environment: Optional[str] = None,
+    sort_by: str = "severity",
+    order: str = "desc",
+    limit: int = 100,
+) -> List[models.WasteItem]:
+    """
+    Filter and sort waste items based on parameters.
+    
+    Parameters:
+      - scan_type: "waste" (all), "high_cost", or "low_usage"
+      - severity_min/max: Filter by severity range [0.0-1.0]
+      - service: Filter by service name (optional)
+      - environment: Filter by environment (optional)
+      - sort_by: "cost", "severity", or "estimated_savings"
+      - order: "asc" or "desc"
+      - limit: Maximum results to return
+    
+    Returns:
+      List of WasteItem models matching the criteria, sorted as specified.
+    """
+    # Start with base query
+    query = db.query(models.WasteItem).filter(
+        models.WasteItem.org_id == org_id
+    )
+    
+    # Apply scan_type filter
+    if scan_type == "high_cost":
+        # High cost: filter to items with high estimated waste
+        # Top 25% by cost threshold
+        query = query.filter(models.WasteItem.waste_type == "high_cost_low_usage")
+    elif scan_type == "low_usage":
+        # Low usage: filter to items detected by low utilization strategy
+        query = query.filter(models.WasteItem.waste_type == "low_utilization")
+    # else: scan_type == "waste" - include all waste types
+    
+    # Apply severity filter
+    query = query.filter(
+        models.WasteItem.severity_score >= severity_min,
+        models.WasteItem.severity_score <= severity_max,
+    )
+    
+    # Apply optional service filter
+    if service:
+        query = query.filter(models.WasteItem.service == service)
+    
+    # Apply optional environment filter
+    if environment:
+        query = query.filter(models.WasteItem.environment == environment)
+    
+    # Apply sorting
+    sort_column = None
+    if sort_by == "cost":
+        sort_column = models.WasteItem.estimated_monthly_waste_usd
+    elif sort_by == "severity":
+        sort_column = models.WasteItem.severity_score
+    elif sort_by == "estimated_savings":
+        # estimated_savings = estimated_monthly_waste_usd (same as cost in our model)
+        sort_column = models.WasteItem.estimated_monthly_waste_usd
+    
+    if sort_column is not None:
+        if order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:  # desc
+            query = query.order_by(sort_column.desc())
+    
+    # Apply limit
+    results = query.limit(limit).all()
+    return results
 
