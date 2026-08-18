@@ -72,6 +72,8 @@ class BillingRecord(Base):
     region = Column(String, nullable=True)
     account = Column(String, nullable=True)
     environment = Column(String, default="production")
+    team = Column(String, nullable=True)
+    owner = Column(String, nullable=True)
     cost = Column(Float, nullable=True)
     usage_hours = Column(Float, nullable=True)
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -118,6 +120,39 @@ class OperationalLog(Base):
 # ---------------------------------------------------------------------------
 # Layer 2 — Cost & Waste Analytics
 # ---------------------------------------------------------------------------
+
+class AnomalyFinding(Base):
+    __tablename__ = "anomaly_findings"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    resource_id = Column(String, nullable=False)
+    service = Column(String, nullable=True)
+    region = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    cost = Column(Float, nullable=True)
+    usage_hours = Column(Float, nullable=True)
+    anomaly_score = Column(Float, nullable=False)
+    severity_score = Column(Float, nullable=False)
+    details = Column(Text, nullable=True)
+    recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class GPUOptimizationFinding(Base):
+    __tablename__ = "gpu_optimization_findings"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    gpu_id = Column(String, nullable=False)
+    account = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    utilization_pct = Column(Float, nullable=True)
+    power_watts = Column(Float, nullable=True)
+    severity_score = Column(Float, nullable=False)
+    estimated_monthly_waste_usd = Column(Float, nullable=False)
+    details = Column(Text, nullable=True)
+    recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 
 class WasteItem(Base):
     """
