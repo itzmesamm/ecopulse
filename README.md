@@ -11,6 +11,7 @@ Layers 2–5 (analytics, GenAI recommendations, remediation, dashboards) will be
 ## Setup
 
 1. **Create a virtual environment and install dependencies**
+
    ```
    python -m venv venv
    # Windows:
@@ -27,16 +28,20 @@ Layers 2–5 (analytics, GenAI recommendations, remediation, dashboards) will be
    - Get your API keys: Settings → API → Project URL, anon key, service_role key
 
 3. **Configure environment**
+
    ```
    copy .env.example .env      # Windows
    cp .env.example .env        # macOS/Linux
    ```
+
    Fill in `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
 
 4. **Run the server**
+
    ```
-   uvicorn backend.main:app --reload
+   uvicorn backend.main:app --reload --reload-dir backend
    ```
+
    Visit http://localhost:8000/docs — tables are created automatically on startup.
 
 5. **Apply Row Level Security**

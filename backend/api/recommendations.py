@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from backend.db import models
 from backend.db.database import get_db
+from backend.genai.embeddings import embed_and_store_logs
 from backend.services.recommendation_service import generate_recommendations_for_org, save_recommendations
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -27,6 +28,12 @@ class RecommendationResponse(BaseModel):
     confidence_score: float
     estimated_savings_usd: float
     context_json: Optional[str]
+    waste_finding_id: Optional[str]
+    explanation: Optional[str]
+    dollar_savings: float
+    carbon_savings_kg: Optional[float]
+    suggested_action: Optional[str]
+    status: str
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -36,6 +43,11 @@ class RecommendationRequest(BaseModel):
     service: Optional[str] = None
     environment: Optional[str] = None
     limit: int = 5
+
+
+class LogIndexResponse(BaseModel):
+    org_id: str
+    embedded_logs: int
 
 
 @router.post("/generate")
@@ -54,6 +66,19 @@ def generate_recommendations(
         environment=payload.environment,
         limit=payload.limit,
     )
+
+    if not recommendations:
+        filters = []
+        if payload.service:
+            filters.append(f"service={payload.service}")
+        if payload.environment:
+            filters.append(f"environment={payload.environment}")
+        filter_text = f" ({', '.join(filters)})" if filters else ""
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Layer 2 waste findings found for this organization{filter_text}. "
+            "Run /waste-analytics/analyze or remove the filters.",
+        )
 
     saved = save_recommendations(db, payload.org_id, recommendations)
     return {
@@ -76,10 +101,33 @@ def generate_recommendations(
                 confidence_score=item.confidence_score,
                 estimated_savings_usd=item.estimated_savings_usd or 0.0,
                 context_json=item.context_json,
+                waste_finding_id=item.waste_finding_id,
+                explanation=item.explanation,
+                dollar_savings=item.dollar_savings or 0.0,
+                carbon_savings_kg=item.carbon_savings_kg,
+                suggested_action=item.suggested_action,
+                status=item.status,
             )
             for item in saved
         ],
     }
+
+
+@router.post("/index-logs", response_model=LogIndexResponse)
+def index_logs(
+    org_id: str = Query(..., description="Organization ID"),
+    db: Session = Depends(get_db),
+) -> LogIndexResponse:
+    """Create or refresh 384-dimensional embeddings for the org's logs."""
+    org = db.query(models.Organization).filter(models.Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    try:
+        embedded_logs = embed_and_store_logs(db, org_id)
+    except (RuntimeError, ValueError, ImportError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return LogIndexResponse(org_id=org_id, embedded_logs=embedded_logs)
 
 
 @router.get("")
@@ -118,6 +166,12 @@ def list_recommendations(
             confidence_score=row.confidence_score,
             estimated_savings_usd=row.estimated_savings_usd or 0.0,
             context_json=row.context_json,
+            waste_finding_id=row.waste_finding_id,
+            explanation=row.explanation,
+            dollar_savings=row.dollar_savings or 0.0,
+            carbon_savings_kg=row.carbon_savings_kg,
+            suggested_action=row.suggested_action,
+            status=row.status,
         )
         for row in rows
     ]

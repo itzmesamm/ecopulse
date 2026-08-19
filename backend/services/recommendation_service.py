@@ -1,11 +1,14 @@
 import json
-import os
 from typing import Any, Dict, List, Optional
-from urllib import request, error
 
 from sqlalchemy.orm import Session
 
 from backend.db import models
+from backend.genai.rag_pipeline import generate_recommendation
+from backend.greenops.carbon_calc import (
+    estimate_carbon_savings_kg_for_gpu_finding,
+    estimate_carbon_savings_kg_for_waste_item,
+)
 
 
 def _build_recommendation_context(
@@ -15,6 +18,8 @@ def _build_recommendation_context(
     environment: Optional[str] = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
+    # Build a mixed context list (waste + GPU optimizations) so the GenAI
+    # can produce recommendations from multiple FinOps/GreenOps signals.
     query = db.query(models.WasteItem).filter(models.WasteItem.org_id == org_id)
     if service:
         query = query.filter(models.WasteItem.service == service)
@@ -26,6 +31,8 @@ def _build_recommendation_context(
     for item in items:
         context.append(
             {
+                "source_type": "waste",
+                "waste_finding_id": item.id,
                 "resource_id": item.resource_id,
                 "service": item.service,
                 "environment": item.environment,
@@ -36,6 +43,28 @@ def _build_recommendation_context(
                 "region": item.region,
             }
         )
+
+    # Add top GPU findings as additional context (roadmap-style multi-signal).
+    gpu_query = db.query(models.GPUOptimizationFinding).filter(models.GPUOptimizationFinding.org_id == org_id)
+    if environment:
+        gpu_query = gpu_query.filter(models.GPUOptimizationFinding.environment == environment)
+    gpu_items = gpu_query.order_by(models.GPUOptimizationFinding.severity_score.desc()).limit(max(0, limit // 2)).all()
+
+    for g in gpu_items:
+        context.append(
+            {
+                "source_type": "gpu",
+                "resource_id": g.gpu_id,  # used as Recommendation.resource_id
+                "service": "GPU",
+                "environment": g.environment,
+                "waste_type": "gpu_idle",
+                "severity_score": round(float(g.severity_score or 0.0), 3),
+                "estimated_monthly_waste_usd": round(float(g.estimated_monthly_waste_usd or 0.0), 2),
+                "details": g.details,
+                "region": None,
+            }
+        )
+
     return context
 
 
@@ -47,8 +76,18 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
         env = item.get("environment") or "unknown-environment"
         severity = float(item.get("severity_score") or 0.0)
         waste_usd = float(item.get("estimated_monthly_waste_usd") or 0.0)
+        source_type = item.get("source_type") or "waste"
 
-        if item.get("waste_type") == "low_utilization":
+        if source_type == "gpu":
+            title = f"Shut down idle GPU ({resource_id})"
+            summary = (
+                f"GPU {resource_id} in {env} appears underutilized. "
+                "A shutdown / reschedule can reduce unnecessary compute spend."
+            )
+            action = "Schedule shutdown or reschedule idle GPU jobs to reduce idle compute."
+            rationale = "CPU/GPU telemetry indicates low utilization while power draw is still incurred."
+            priority = "high" if severity >= 0.7 else "medium"
+        elif item.get("waste_type") == "low_utilization":
             title = f"Right-size idle {service} resource"
             summary = f"{resource_id} in {env} shows low utilization and may be idle for a large portion of the month."
             action = "Scale the resource down or schedule shutdown during idle periods to reduce unnecessary spend."
@@ -64,10 +103,11 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
         recommendations.append(
             {
                 "org_id": org_id,
+                "waste_finding_id": item.get("waste_finding_id"),
                 "resource_id": resource_id,
                 "service": service,
                 "environment": env,
-                "source_type": "waste",
+                "source_type": source_type,
                 "recommendation_type": "optimization",
                 "title": title,
                 "summary": summary,
@@ -76,6 +116,10 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
                 "priority": priority,
                 "confidence_score": round(min(0.99, 0.6 + (severity * 0.4)), 2),
                 "estimated_savings_usd": round(waste_usd, 2),
+                "explanation": summary,
+                "dollar_savings": round(waste_usd, 2),
+                "suggested_action": action,
+                "status": "pending",
                 "context_json": json.dumps(item),
             }
         )
@@ -83,60 +127,39 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
     return recommendations
 
 
-def _generate_ai_recommendations(context: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+def _generate_ai_recommendations(
+    db: Session,
+    org_id: str,
+    context: List[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
     if not context:
         return []
 
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model_name = os.getenv("OLLAMA_MODEL", "llama3.1")
-    if not model_name:
-        return None
-
-    prompt = (
-        "You are a FinOps and GreenOps advisor. "
-        "Based on the waste findings below, generate strictly valid JSON only. "
-        "Return a JSON object with exactly one top-level key named 'recommendations'. "
-        "The value must be a list of up to 3 recommendations. "
-        "Each recommendation must include exactly these fields: "
-        "title, summary, action, rationale, priority, confidence_score, estimated_savings_usd, "
-        "resource_id, service, environment, source_type, recommendation_type. "
-        "Use only values that are realistic for cloud cost optimization. "
-        "Confidence score must be a float between 0.0 and 1.0. "
-        "Estimated savings must be a non-negative number. "
-        "Do not include markdown or extra explanation.\n\n"
-        f"Waste findings:\n{json.dumps(context, indent=2)}"
-    )
-
-    payload = {
-        "model": model_name,
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0.2},
-    }
-
-    try:
-        url = f"{base_url.rstrip('/')}/api/generate"
-        req = request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+    recommendations = []
+    for waste_finding in context:
+        result = generate_recommendation(db, org_id, waste_finding)
+        if result is None:
+            return None
+        source_type = waste_finding.get("source_type") or "waste"
+        recommendations.append(
+            {
+                **waste_finding,
+                "source_type": source_type,
+                "recommendation_type": "optimization",
+                "title": f"Review {waste_finding.get('resource_id', 'resource')} optimization",
+                "summary": result["explanation"],
+                "action": result["suggested_action"],
+                "rationale": result["explanation"],
+                "priority": "high" if waste_finding["severity_score"] >= 0.7 else "medium",
+                "confidence_score": result["confidence"],
+                "estimated_savings_usd": result["dollar_savings"],
+                "explanation": result["explanation"],
+                "dollar_savings": result["dollar_savings"],
+                "suggested_action": result["suggested_action"],
+                "context_json": json.dumps(waste_finding),
+            }
         )
-        with request.urlopen(req, timeout=60) as response:
-            body = response.read().decode("utf-8")
-        result = json.loads(body)
-        raw_text = (result.get("response") or "").strip()
-        if not raw_text:
-            return None
-
-        parsed = json.loads(raw_text)
-        recommendations = parsed.get("recommendations")
-        if not isinstance(recommendations, list):
-            return None
-        return recommendations
-    except (error.URLError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+    return recommendations
 
 
 def generate_recommendations_for_org(
@@ -150,7 +173,7 @@ def generate_recommendations_for_org(
     if not context:
         return []
 
-    ai_recommendations = _generate_ai_recommendations(context)
+    ai_recommendations = _generate_ai_recommendations(db, org_id, context)
     if ai_recommendations:
         for item in ai_recommendations:
             item.setdefault("org_id", org_id)
@@ -168,6 +191,34 @@ def generate_recommendations_for_org(
 def save_recommendations(db: Session, org_id: str, recommendations: List[Dict[str, Any]]) -> List[models.Recommendation]:
     saved: List[models.Recommendation] = []
     for item in recommendations:
+        # Compute carbon impact if it wasn’t generated by the LLM contract.
+        carbon_savings_kg = item.get("carbon_savings_kg")
+        waste_finding_id = item.get("waste_finding_id")
+        source_type = item.get("source_type", "waste")
+        resource_id = item.get("resource_id")
+
+        if carbon_savings_kg is None and waste_finding_id:
+            try:
+                carbon_savings_kg = estimate_carbon_savings_kg_for_waste_item(
+                    db=db,
+                    org_id=org_id,
+                    waste_item_id=waste_finding_id,
+                )
+            except Exception:
+                # Keep integrations resilient; carbon can be computed later when data improves.
+                carbon_savings_kg = None
+
+        # GPU-based carbon estimate (if waste_finding_id wasn’t present)
+        if carbon_savings_kg is None and source_type == "gpu" and resource_id:
+            try:
+                carbon_savings_kg = estimate_carbon_savings_kg_for_gpu_finding(
+                    db=db,
+                    org_id=org_id,
+                    gpu_id=resource_id,
+                )
+            except Exception:
+                carbon_savings_kg = None
+
         record = models.Recommendation(
             org_id=org_id,
             resource_id=item.get("resource_id"),
@@ -183,6 +234,12 @@ def save_recommendations(db: Session, org_id: str, recommendations: List[Dict[st
             confidence_score=float(item.get("confidence_score") or 0.0),
             estimated_savings_usd=float(item.get("estimated_savings_usd") or 0.0),
             context_json=item.get("context_json") or json.dumps(item),
+            waste_finding_id=item.get("waste_finding_id"),
+            explanation=item.get("explanation") or item.get("summary"),
+            dollar_savings=float(item.get("dollar_savings") or item.get("estimated_savings_usd") or 0.0),
+            carbon_savings_kg=carbon_savings_kg,
+            suggested_action=item.get("suggested_action") or item.get("action"),
+            status=item.get("status", "pending"),
         )
         db.add(record)
         saved.append(record)
