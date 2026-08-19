@@ -22,6 +22,10 @@ from backend.api.recommendations import router as recommendation_router
 from backend.api.anomalies import router as anomalies_router
 from backend.api.gpu_optimizer import router as gpu_optimizer_router
 from backend.api.cost_grouping import router as cost_grouping_router
+from backend.api.remediation import router as remediation_router
+from backend.api.alerts import router as alerts_router
+from backend.api.assistant import router as assistant_router
+from backend.api.greenops import router as greenops_router
 from backend.ingestion.persist import ingest_and_persist
 
 if engine.dialect.name == "postgresql":
@@ -49,6 +53,10 @@ app.include_router(recommendation_router)
 app.include_router(anomalies_router)
 app.include_router(gpu_optimizer_router)
 app.include_router(cost_grouping_router)
+app.include_router(remediation_router)
+app.include_router(alerts_router)
+app.include_router(assistant_router)
+app.include_router(greenops_router)
 
 
 @app.get("/health")

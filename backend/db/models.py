@@ -270,3 +270,36 @@ class RecommendationFeedback(Base):
     feedback_text = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+
+# ---------------------------------------------------------------------------
+# Layer 4/5 — Remediation audit + Alerts
+# ---------------------------------------------------------------------------
+
+
+class AuditLog(Base):
+    """Audit trace for remediation attempts and approval outcomes."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    recommendation_id = Column(String, ForeignKey("recommendations.id"), nullable=True)
+    action_taken = Column(Text, nullable=True)
+    result = Column(Text, nullable=True)
+    executed_by = Column(String, nullable=True)
+    executed_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class Alert(Base):
+    """Alert records created by anomaly/budget/policy checks."""
+
+    __tablename__ = "alerts"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    alert_type = Column(String, nullable=False)  # anomaly | budget | policy_violation
+    message = Column(Text, nullable=False)
+    severity = Column(String, nullable=False)  # warning | critical | info
+    channel = Column(String, nullable=True)  # slack | teams | email | internal
+    sent_at = Column(DateTime, default=datetime.datetime.utcnow)
+
