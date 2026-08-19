@@ -20,6 +20,23 @@ from backend.ingestion.persist import ingest_and_persist
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="EcoPulse", description="AI-powered FinOps and GreenOps platform", version="0.1.0")
+<<<<<<< Updated upstream
+=======
+
+# CORS configuration
+cors_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:5174,http://localhost:3000",
+).split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+>>>>>>> Stashed changes
 app.include_router(auth_router)
 app.include_router(waste_analytics_router)
 

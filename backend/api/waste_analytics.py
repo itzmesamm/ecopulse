@@ -281,3 +281,158 @@ def get_insights_by_environment(
         }
     
     return result
+<<<<<<< Updated upstream
+=======
+
+
+# ============================================================================
+# Dashboard & Analytics Endpoints
+# ============================================================================
+
+@router.get("/dashboard/stats")
+def get_dashboard_stats(
+    org_id: str = Query(..., description="Organization ID"),
+    db: Session = Depends(get_db),
+) -> DashboardStats:
+    """
+    Get dashboard statistics for an organization.
+    
+    Returns combined waste analytics and cost information for dashboard display.
+    """
+    # Verify org exists
+    org = db.query(models.Organization).filter(models.Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Query waste items
+    waste_items = db.query(models.WasteItem).filter(
+        models.WasteItem.org_id == org_id
+    ).all()
+    
+    if not waste_items:
+        return DashboardStats(
+            total_waste_items=0,
+            total_monthly_cost=0.0,
+            avg_severity_score=0.0,
+            critical_items=0,
+            potential_monthly_savings=0.0,
+        )
+    
+    total_waste = sum(w.estimated_monthly_waste_usd for w in waste_items)
+    avg_severity = sum(w.severity_score for w in waste_items) / len(waste_items)
+    critical = sum(1 for w in waste_items if w.severity_score >= 0.8)
+    
+    return DashboardStats(
+        total_waste_items=len(waste_items),
+        total_monthly_cost=round(total_waste, 2),
+        avg_severity_score=round(avg_severity, 3),
+        critical_items=critical,
+        potential_monthly_savings=round(total_waste, 2),
+    )
+
+
+@router.get("/analytics/cost-trend")
+def get_cost_trend(
+    org_id: str = Query(..., description="Organization ID"),
+    days: int = Query(30, description="Number of days to retrieve"),
+    db: Session = Depends(get_db),
+) -> list[CostTrendData]:
+    """
+    Get cost trend over time for an organization.
+    
+    Returns daily cost data for the specified number of days.
+    """
+    # Verify org exists
+    org = db.query(models.Organization).filter(models.Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Query waste items grouped by date
+    trends = db.query(
+        func.DATE(models.WasteItem.analyzed_at).label('date'),
+        func.SUM(models.WasteItem.estimated_monthly_waste_usd).label('total_cost')
+    ).filter(
+        models.WasteItem.org_id == org_id,
+        models.WasteItem.analyzed_at >= start_date
+    ).group_by(func.DATE(models.WasteItem.analyzed_at)).all()
+    
+    return [
+        CostTrendData(
+            date=str(t.date),
+            cost=round(float(t.total_cost or 0), 2)
+        )
+        for t in trends
+    ]
+
+
+@router.get("/greenops/progress")
+def get_optimization_progress(
+    org_id: str = Query(..., description="Organization ID"),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """Return savings and carbon reduction goal progress for the dashboard."""
+    org = db.query(models.Organization).filter(models.Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    waste_items = db.query(models.WasteItem).filter(
+        models.WasteItem.org_id == org_id
+    ).all()
+
+    total_savings = sum(w.estimated_monthly_waste_usd for w in waste_items)
+    carbon_saved = round(total_savings * 0.00005, 2)
+
+    return [
+        {
+            "id": "savings",
+            "label": "Savings goal",
+            "current": round(total_savings, 2),
+            "target": max(25000, round(total_savings * 1.5, 2)),
+            "tone": "orange",
+        },
+        {
+            "id": "carbon",
+            "label": "Carbon reduction goal",
+            "current": carbon_saved,
+            "target": max(3, round(carbon_saved * 1.5, 2)),
+            "unit": "t CO2",
+            "tone": "teal",
+        },
+    ]
+
+
+@router.get("/recommendations/history")
+def get_remediation_history(
+    org_id: str = Query(..., description="Organization ID"),
+    limit: int = Query(20, description="Maximum number of results"),
+    status: str = Query(None, description="Filter by status (pending/in_progress/completed/failed)"),
+    db: Session = Depends(get_db),
+) -> list[RemediationActionResponse]:
+    """
+    Get history of remediation actions taken for an organization.
+    
+    Supports filtering by status and limiting results.
+    """
+    # Verify org exists
+    org = db.query(models.Organization).filter(models.Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    
+    # Build query
+    query = db.query(models.RemediationAction).filter(
+        models.RemediationAction.org_id == org_id
+    )
+    
+    if status:
+        query = query.filter(models.RemediationAction.status == status)
+    
+    # Sort by creation date descending
+    actions = query.order_by(
+        models.RemediationAction.created_at.desc()
+    ).limit(limit).all()
+    
+    return [RemediationActionResponse.from_orm(action) for action in actions]
+>>>>>>> Stashed changes
