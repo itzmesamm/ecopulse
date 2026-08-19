@@ -17,6 +17,7 @@ from backend.db.database import Base, engine, get_db
 from backend.api.auth import router as auth_router
 from backend.api.waste_analytics import router as waste_analytics_router
 from backend.api.forecasting import router as forecasting_router
+from backend.api.recommendations import router as recommendation_router
 from backend.api.anomalies import router as anomalies_router
 from backend.api.gpu_optimizer import router as gpu_optimizer_router
 from backend.api.cost_grouping import router as cost_grouping_router
@@ -28,6 +29,7 @@ app = FastAPI(title="EcoPulse", description="AI-powered FinOps and GreenOps plat
 app.include_router(auth_router)
 app.include_router(waste_analytics_router)
 app.include_router(forecasting_router)
+app.include_router(recommendation_router)
 app.include_router(anomalies_router)
 app.include_router(gpu_optimizer_router)
 app.include_router(cost_grouping_router)

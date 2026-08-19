@@ -177,3 +177,41 @@ class WasteItem(Base):
     details = Column(Text, nullable=True)  # JSON or free-form notes about the waste
     analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+
+# ---------------------------------------------------------------------------
+# Layer 3 — GenAI Recommendation Engine
+# ---------------------------------------------------------------------------
+
+class Recommendation(Base):
+    """AI-generated recommendation derived from waste or forecasting signals."""
+    __tablename__ = "recommendations"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    resource_id = Column(String, nullable=True)
+    service = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    source_type = Column(String, nullable=False, default="waste")  # waste | forecast | anomaly
+    recommendation_type = Column(String, nullable=False, default="optimization")
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=False)
+    action = Column(Text, nullable=False)
+    rationale = Column(Text, nullable=True)
+    priority = Column(String, nullable=False, default="medium")
+    confidence_score = Column(Float, nullable=False, default=0.0)
+    estimated_savings_usd = Column(Float, nullable=True, default=0.0)
+    context_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RecommendationFeedback(Base):
+    """Optional user feedback on AI recommendations."""
+    __tablename__ = "recommendation_feedback"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    recommendation_id = Column(String, ForeignKey("recommendations.id"), nullable=False)
+    user_id = Column(String, nullable=True)
+    accepted = Column(String, nullable=False, default="pending")  # accepted | rejected | pending
+    feedback_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
