@@ -11,6 +11,7 @@ Run with: uvicorn backend.main:app --reload
 Docs at:  http://localhost:8000/docs
 """
 from fastapi import FastAPI, Depends
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.db.database import Base, engine, get_db
@@ -23,7 +24,22 @@ from backend.api.gpu_optimizer import router as gpu_optimizer_router
 from backend.api.cost_grouping import router as cost_grouping_router
 from backend.ingestion.persist import ingest_and_persist
 
+if engine.dialect.name == "postgresql":
+  with engine.begin() as connection:
+    connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
 Base.metadata.create_all(bind=engine)
+
+if engine.dialect.name == "postgresql":
+  with engine.begin() as connection:
+    connection.execute(text("ALTER TABLE billing_records ADD COLUMN IF NOT EXISTS team VARCHAR"))
+    connection.execute(text("ALTER TABLE billing_records ADD COLUMN IF NOT EXISTS owner VARCHAR"))
+    connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS waste_finding_id VARCHAR"))
+    connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS explanation TEXT"))
+    connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS dollar_savings DOUBLE PRECISION DEFAULT 0"))
+    connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS carbon_savings_kg DOUBLE PRECISION"))
+    connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS suggested_action TEXT"))
+    connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'pending'"))
 
 app = FastAPI(title="EcoPulse", description="AI-powered FinOps and GreenOps platform", version="0.1.0")
 app.include_router(auth_router)

@@ -1,11 +1,10 @@
 import json
-import os
 from typing import Any, Dict, List, Optional
-from urllib import request, error
 
 from sqlalchemy.orm import Session
 
 from backend.db import models
+from backend.genai.rag_pipeline import generate_recommendation
 
 
 def _build_recommendation_context(
@@ -26,6 +25,7 @@ def _build_recommendation_context(
     for item in items:
         context.append(
             {
+                "waste_finding_id": item.id,
                 "resource_id": item.resource_id,
                 "service": item.service,
                 "environment": item.environment,
@@ -64,6 +64,7 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
         recommendations.append(
             {
                 "org_id": org_id,
+                "waste_finding_id": item.get("waste_finding_id"),
                 "resource_id": resource_id,
                 "service": service,
                 "environment": env,
@@ -76,6 +77,10 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
                 "priority": priority,
                 "confidence_score": round(min(0.99, 0.6 + (severity * 0.4)), 2),
                 "estimated_savings_usd": round(waste_usd, 2),
+                "explanation": summary,
+                "dollar_savings": round(waste_usd, 2),
+                "suggested_action": action,
+                "status": "pending",
                 "context_json": json.dumps(item),
             }
         )
@@ -83,60 +88,38 @@ def _fallback_recommendations(context: List[Dict[str, Any]], org_id: str) -> Lis
     return recommendations
 
 
-def _generate_ai_recommendations(context: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+def _generate_ai_recommendations(
+    db: Session,
+    org_id: str,
+    context: List[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
     if not context:
         return []
 
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    model_name = os.getenv("OLLAMA_MODEL", "llama3.1")
-    if not model_name:
-        return None
-
-    prompt = (
-        "You are a FinOps and GreenOps advisor. "
-        "Based on the waste findings below, generate strictly valid JSON only. "
-        "Return a JSON object with exactly one top-level key named 'recommendations'. "
-        "The value must be a list of up to 3 recommendations. "
-        "Each recommendation must include exactly these fields: "
-        "title, summary, action, rationale, priority, confidence_score, estimated_savings_usd, "
-        "resource_id, service, environment, source_type, recommendation_type. "
-        "Use only values that are realistic for cloud cost optimization. "
-        "Confidence score must be a float between 0.0 and 1.0. "
-        "Estimated savings must be a non-negative number. "
-        "Do not include markdown or extra explanation.\n\n"
-        f"Waste findings:\n{json.dumps(context, indent=2)}"
-    )
-
-    payload = {
-        "model": model_name,
-        "prompt": prompt,
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0.2},
-    }
-
-    try:
-        url = f"{base_url.rstrip('/')}/api/generate"
-        req = request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+    recommendations = []
+    for waste_finding in context:
+        result = generate_recommendation(db, org_id, waste_finding)
+        if result is None:
+            return None
+        recommendations.append(
+            {
+                **waste_finding,
+                "source_type": "waste",
+                "recommendation_type": "optimization",
+                "title": f"Review {waste_finding.get('resource_id', 'resource')} optimization",
+                "summary": result["explanation"],
+                "action": result["suggested_action"],
+                "rationale": result["explanation"],
+                "priority": "high" if waste_finding["severity_score"] >= 0.7 else "medium",
+                "confidence_score": result["confidence"],
+                "estimated_savings_usd": result["dollar_savings"],
+                "explanation": result["explanation"],
+                "dollar_savings": result["dollar_savings"],
+                "suggested_action": result["suggested_action"],
+                "context_json": json.dumps(waste_finding),
+            }
         )
-        with request.urlopen(req, timeout=60) as response:
-            body = response.read().decode("utf-8")
-        result = json.loads(body)
-        raw_text = (result.get("response") or "").strip()
-        if not raw_text:
-            return None
-
-        parsed = json.loads(raw_text)
-        recommendations = parsed.get("recommendations")
-        if not isinstance(recommendations, list):
-            return None
-        return recommendations
-    except (error.URLError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+    return recommendations
 
 
 def generate_recommendations_for_org(
@@ -150,7 +133,7 @@ def generate_recommendations_for_org(
     if not context:
         return []
 
-    ai_recommendations = _generate_ai_recommendations(context)
+    ai_recommendations = _generate_ai_recommendations(db, org_id, context)
     if ai_recommendations:
         for item in ai_recommendations:
             item.setdefault("org_id", org_id)
@@ -183,6 +166,12 @@ def save_recommendations(db: Session, org_id: str, recommendations: List[Dict[st
             confidence_score=float(item.get("confidence_score") or 0.0),
             estimated_savings_usd=float(item.get("estimated_savings_usd") or 0.0),
             context_json=item.get("context_json") or json.dumps(item),
+            waste_finding_id=item.get("waste_finding_id"),
+            explanation=item.get("explanation") or item.get("summary"),
+            dollar_savings=float(item.get("dollar_savings") or item.get("estimated_savings_usd") or 0.0),
+            carbon_savings_kg=item.get("carbon_savings_kg"),
+            suggested_action=item.get("suggested_action") or item.get("action"),
+            status=item.get("status", "pending"),
         )
         db.add(record)
         saved.append(record)

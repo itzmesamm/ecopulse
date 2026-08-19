@@ -8,3 +8,4 @@ supabase==2.9.1
 pytest==7.4.3
 pytest-mock==3.12.0
 pyod==2.0.4
+sentence-transformers==3.2.1
