@@ -1,0 +1,56 @@
+/* ============================================================
+   VEYA — Design tokens
+   Theme values are defined per data-theme attribute on <html>.
+   ============================================================ */
+
+:root,
+[data-theme="dark"] {
+  --bg: #0e0e11;
+  --surface: #18191d;
+  --surface-alt: #212227;
+  --card-border: #2b2c32;
+  --text: #f2f3f5;
+  --text-2: #95969e;
+  --text-3: #65666e;
+  --shadow: none;
+  --chart-grid: #2b2c32;
+  --overlay-tint: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme="light"] {
+  --bg: #f3f4f8;
+  --surface: #ffffff;
+  --surface-alt: #f3f4f8;
+  --card-border: #e9eaf0;
+  --text: #15161a;
+  --text-2: #71727c;
+  --text-3: #9698a3;
+  --shadow: 0 10px 30px rgba(20, 22, 30, 0.06);
+  --chart-grid: #eeeff3;
+  --overlay-tint: rgba(20, 22, 30, 0.02);
+}
+
+:root {
+  --blue: #4f7cff;
+  --blue-soft: rgba(79, 124, 255, 0.14);
+  --green: #2fbe7c;
+  --green-soft: rgba(47, 190, 124, 0.14);
+  --red: #f45b69;
+  --red-soft: rgba(244, 91, 105, 0.14);
+  --orange: #ff9f43;
+  --orange-soft: rgba(255, 159, 67, 0.16);
+  --purple: #8c7cf0;
+  --purple-soft: rgba(140, 124, 240, 0.16);
+  --teal: #2bc8b7;
+  --teal-soft: rgba(43, 200, 183, 0.15);
+
+  --r-xl: 26px;
+  --r-lg: 20px;
+  --r-md: 16px;
+  --r-sm: 11px;
+  --r-pill: 999px;
+
+  --font-display: "Plus Jakarta Sans", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}

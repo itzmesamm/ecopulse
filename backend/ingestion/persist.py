@@ -4,6 +4,7 @@ Layer 1 — persistence.
 Pulls from all 4 collectors and actually writes rows to the DB, scoped to
 an org, so ingestion history exists beyond a single API call.
 """
+import datetime
 from sqlalchemy.orm import Session
 
 from backend.db import models
@@ -11,6 +12,17 @@ from backend.ingestion.billing_collector import get_billing_records
 from backend.ingestion.gpu_telemetry_collector import get_gpu_metrics
 from backend.ingestion.k8s_collector import get_k8s_metrics
 from backend.ingestion.operational_logs_collector import get_operational_logs
+
+
+def _parse_ts(value):
+    if not value:
+        return datetime.datetime.utcnow()
+    if isinstance(value, datetime.datetime):
+        return value
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", ""))
+    except ValueError:
+        return datetime.datetime.utcnow()
 
 
 def ingest_and_persist(db: Session, org_id: str) -> dict:
@@ -25,6 +37,7 @@ def ingest_and_persist(db: Session, org_id: str) -> dict:
             org_id=r["org_id"], resource_id=r["resource_id"], service=r["resource_type"],
             region=r.get("region"), account=r.get("account"), environment=r.get("environment"),
             cost=r.get("estimated_monthly_cost_usd"), usage_hours=r.get("usage_hours"),
+            recorded_at=_parse_ts(r.get("recorded_at")),
         ))
     for r in gpu:
         db.add(models.GPUMetric(

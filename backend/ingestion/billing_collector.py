@@ -15,14 +15,16 @@ REGIONS = ["us-east-1", "us-west-2", "eu-west-1", "ap-south-1"]
 ENVIRONMENTS = ["production", "staging", "sandbox"]
 
 
-def get_billing_records(n: int = 20, org_id: str | None = None) -> list[dict]:
+def get_billing_records(n: int = 40, org_id: str | None = None) -> list[dict]:
     """Returns a list of synthetic billing records, one per resource."""
     records = []
+    now = datetime.datetime.utcnow()
     for i in range(n):
         resource_type = random.choice(RESOURCE_TYPES)
         is_wasteful = random.random() < 0.35
         usage_hours = random.uniform(0, 5) if is_wasteful else random.uniform(15, 24)
         cost = random.uniform(50, 900)
+        recorded_at = now - datetime.timedelta(days=random.randint(0, 29), hours=random.randint(0, 23))
 
         records.append({
             "org_id": org_id,
@@ -33,6 +35,6 @@ def get_billing_records(n: int = 20, org_id: str | None = None) -> list[dict]:
             "environment": random.choice(ENVIRONMENTS),
             "estimated_monthly_cost_usd": round(cost, 2),
             "usage_hours": round(usage_hours, 2),
-            "recorded_at": datetime.datetime.utcnow().isoformat(),
+            "recorded_at": recorded_at.isoformat(),
         })
     return records

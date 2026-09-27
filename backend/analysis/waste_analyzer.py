@@ -238,27 +238,33 @@ class HighCostLowUsageStrategy(WasteDetectionStrategy):
 def persist_waste_items(db: Session, org_id: str, waste_results: list[WasteAnalysisResult]) -> int:
     """
     Persist detected waste items to the database.
-    
-    Returns the number of waste items persisted.
+
+    Replaces prior analysis results for the org so reconnect/analyze
+    does not duplicate findings.
     """
-    # Get the billing records for this org to link waste items
+    db.query(models.RemediationAction).filter(
+        models.RemediationAction.org_id == org_id
+    ).delete(synchronize_session=False)
+    db.query(models.WasteItem).filter(
+        models.WasteItem.org_id == org_id
+    ).delete(synchronize_session=False)
+
     billing_records = {
-        r.resource_id: r 
+        r.resource_id: r
         for r in db.query(models.BillingRecord).filter(
             models.BillingRecord.org_id == org_id
         ).all()
     }
-    
+
     count = 0
     for result in waste_results:
         billing_record = billing_records.get(result.resource_id)
         if not billing_record:
-            continue  # Skip if no matching billing record
-        
-        # Final safety check: ensure values are never negative
+            continue
+
         severity = _clamp_score(result.severity_score)
         waste_usd = _ensure_positive(result.estimated_monthly_waste_usd)
-        
+
         waste_item = models.WasteItem(
             org_id=org_id,
             billing_record_id=billing_record.id,
@@ -273,7 +279,7 @@ def persist_waste_items(db: Session, org_id: str, waste_results: list[WasteAnaly
         )
         db.add(waste_item)
         count += 1
-    
+
     db.commit()
     return count
 

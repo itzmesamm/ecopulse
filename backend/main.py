@@ -10,7 +10,9 @@ Currently wires up:
 Run with: uvicorn backend.main:app --reload
 Docs at:  http://localhost:8000/docs
 """
+import os
 from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -46,6 +48,28 @@ if engine.dialect.name == "postgresql":
     connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'pending'"))
 
 app = FastAPI(title="EcoPulse", description="AI-powered FinOps and GreenOps platform", version="0.1.0")
+
+# CORS configuration
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,"
+        "http://localhost:5174,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:5173,"
+        "http://127.0.0.1:5174,"
+        "http://127.0.0.1:3000",
+    ).split(",")
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(auth_router)
 app.include_router(waste_analytics_router)
 app.include_router(forecasting_router)

@@ -5,3 +5,7 @@ __pycache__/
 .env
 ecopulse.db
 .pytest_cache/
+
+# Frontend dependencies and build/cache files
+frontend/node_modules/
+frontend/dist/
