@@ -15,14 +15,51 @@ Layer 3+ tables (recommendations, remediation_actions, forecasts,
 anomalies, log_embeddings, alerts) will be added when we build those layers.
 """
 import datetime
+import json
 import uuid
 from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import relationship
 from backend.db.database import Base
 
 
 def _uuid():
     return str(uuid.uuid4())
+
+
+class Vector384(UserDefinedType):
+    """Use pgvector on Postgres and JSON text for local SQLite development."""
+
+    cache_ok = True
+
+    def get_col_spec(self, **kwargs):
+        return "TEXT"
+
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None or isinstance(value, str):
+                return value
+            return json.dumps(value)
+
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None or isinstance(value, list):
+                return value
+            try:
+                return json.loads(value)
+            except (TypeError, json.JSONDecodeError):
+                return value
+
+        return process
+
+
+@compiles(Vector384, "postgresql")
+def compile_vector384(type_, compiler, **kwargs):
+    return "vector(384)"
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +124,8 @@ class BillingRecord(Base):
     region = Column(String, nullable=True)
     account = Column(String, nullable=True)
     environment = Column(String, default="production")
+    team = Column(String, nullable=True)
+    owner = Column(String, nullable=True)
     cost = Column(Float, nullable=True)
     usage_hours = Column(Float, nullable=True)
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -130,9 +169,55 @@ class OperationalLog(Base):
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
+class LogEmbedding(Base):
+    """Semantic vector for an operational log used by Layer 3 retrieval."""
+    __tablename__ = "log_embeddings"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector384, nullable=False)
+    source_ref = Column(String, ForeignKey("operational_logs.id"), nullable=True)
+    source_type = Column(String, nullable=False, default="operational_log")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 # ---------------------------------------------------------------------------
 # Layer 2 — Cost & Waste Analytics
 # ---------------------------------------------------------------------------
+
+class AnomalyFinding(Base):
+    __tablename__ = "anomaly_findings"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    resource_id = Column(String, nullable=False)
+    service = Column(String, nullable=True)
+    region = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    cost = Column(Float, nullable=True)
+    usage_hours = Column(Float, nullable=True)
+    anomaly_score = Column(Float, nullable=False)
+    severity_score = Column(Float, nullable=False)
+    details = Column(Text, nullable=True)
+    recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class GPUOptimizationFinding(Base):
+    __tablename__ = "gpu_optimization_findings"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    gpu_id = Column(String, nullable=False)
+    account = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    utilization_pct = Column(Float, nullable=True)
+    power_watts = Column(Float, nullable=True)
+    severity_score = Column(Float, nullable=False)
+    estimated_monthly_waste_usd = Column(Float, nullable=False)
+    details = Column(Text, nullable=True)
+    recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 
 class WasteItem(Base):
     """
@@ -173,4 +258,79 @@ class RemediationAction(Base):
 
     organization = relationship("Organization")
     waste_item = relationship("WasteItem")
+# ---------------------------------------------------------------------------
+# Layer 3 — GenAI Recommendation Engine
+# ---------------------------------------------------------------------------
+
+class Recommendation(Base):
+    """AI-generated recommendation derived from waste or forecasting signals."""
+    __tablename__ = "recommendations"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    resource_id = Column(String, nullable=True)
+    service = Column(String, nullable=True)
+    environment = Column(String, nullable=True)
+    source_type = Column(String, nullable=False, default="waste")  # waste | forecast | anomaly
+    recommendation_type = Column(String, nullable=False, default="optimization")
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=False)
+    action = Column(Text, nullable=False)
+    rationale = Column(Text, nullable=True)
+    priority = Column(String, nullable=False, default="medium")
+    confidence_score = Column(Float, nullable=False, default=0.0)
+    estimated_savings_usd = Column(Float, nullable=True, default=0.0)
+    context_json = Column(Text, nullable=True)
+    waste_finding_id = Column(String, ForeignKey("waste_items.id"), nullable=True)
+    explanation = Column(Text, nullable=True)
+    dollar_savings = Column(Float, nullable=True, default=0.0)
+    carbon_savings_kg = Column(Float, nullable=True)
+    suggested_action = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="pending")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RecommendationFeedback(Base):
+    """Optional user feedback on AI recommendations."""
+    __tablename__ = "recommendation_feedback"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    recommendation_id = Column(String, ForeignKey("recommendations.id"), nullable=False)
+    user_id = Column(String, nullable=True)
+    accepted = Column(String, nullable=False, default="pending")  # accepted | rejected | pending
+    feedback_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Layer 4/5 — Remediation audit + Alerts
+# ---------------------------------------------------------------------------
+
+
+class AuditLog(Base):
+    """Audit trace for remediation attempts and approval outcomes."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    recommendation_id = Column(String, ForeignKey("recommendations.id"), nullable=True)
+    action_taken = Column(Text, nullable=True)
+    result = Column(Text, nullable=True)
+    executed_by = Column(String, nullable=True)
+    executed_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class Alert(Base):
+    """Alert records created by anomaly/budget/policy checks."""
+
+    __tablename__ = "alerts"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    alert_type = Column(String, nullable=False)  # anomaly | budget | policy_violation
+    message = Column(Text, nullable=False)
+    severity = Column(String, nullable=False)  # warning | critical | info
+    channel = Column(String, nullable=True)  # slack | teams | email | internal
+    sent_at = Column(DateTime, default=datetime.datetime.utcnow)
 

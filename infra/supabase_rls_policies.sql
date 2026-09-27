@@ -34,6 +34,39 @@ create policy org_isolation_logs on operational_logs
 create policy org_isolation_profiles on user_profiles
   for select using (org_id = auth_org_id());
 
+-- ---------------------------------------------------------------------------
+-- Layer 2-5 tables (expanded org isolation)
+-- ---------------------------------------------------------------------------
+
+alter table waste_items enable row level security;
+alter table anomaly_findings enable row level security;
+alter table gpu_optimization_findings enable row level security;
+alter table log_embeddings enable row level security;
+alter table recommendations enable row level security;
+alter table audit_logs enable row level security;
+alter table alerts enable row level security;
+
+create policy org_isolation_waste_items on waste_items
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_anomalies on anomaly_findings
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_gpu_optimizations on gpu_optimization_findings
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_log_embeddings on log_embeddings
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_recommendations on recommendations
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_audit_logs on audit_logs
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_alerts on alerts
+  for all using (org_id = auth_org_id());
+
 -- Note: the FastAPI backend connects using the SERVICE ROLE key, which
 -- BYPASSES RLS by design. RLS here is the safety net for any future path
 -- where the frontend queries Supabase directly with a user's own token
