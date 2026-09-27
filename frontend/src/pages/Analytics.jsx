@@ -26,7 +26,7 @@ export default function Analytics() {
   return (
     <AppShell>
       <Topbar title="Analytics" />
-      <div className="page-sub">Cost trends, waste analytics, and anomaly detection across meridian-prod.</div>
+      <div className="page-sub">Cost trends, waste analytics, and anomaly detection across your connected accounts.</div>
 
       <div className="card panel" style={{ marginBottom: 16 }}>
         <div className="panel-head">

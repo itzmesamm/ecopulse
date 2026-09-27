@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "./context/ThemeContext";
+import { UserProvider } from "./context/UserContext";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -11,6 +12,7 @@ import Insights from "./pages/Insights";
 import Alerts from "./pages/Alerts";
 import GreenOps from "./pages/GreenOps";
 import Settings from "./pages/Settings";
+import Profile from "./pages/Profile";
 
 function RequireAuth({ children }) {
   if (!api.isAuthenticated()) {
@@ -23,6 +25,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <BrowserRouter>
+        <UserProvider>
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
@@ -90,7 +93,17 @@ export default function App() {
               </RequireAuth>
             }
           />
+
+          <Route
+            path="/profile"
+            element={
+              <RequireAuth>
+                <Profile />
+              </RequireAuth>
+            }
+          />
         </Routes>
+        </UserProvider>
       </BrowserRouter>
     </ThemeProvider>
   );

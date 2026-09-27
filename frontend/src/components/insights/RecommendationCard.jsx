@@ -3,6 +3,11 @@ import { IconBadge, Pill } from "../ui/Pill";
 const STATUS_TONE = { pending: "orange", executed: "green", rejected: "red" };
 const STATUS_LABEL = { pending: "Pending", executed: "Executed", rejected: "Rejected" };
 
+const PRIORITY_TONE = { high: "red", medium: "orange", low: "teal" };
+const PRIORITY_LABEL = { high: "High priority", medium: "Medium priority", low: "Low priority" };
+
+const RESOURCE_TYPE_LABEL = { gpu: "GPU", compute: "Compute", storage: "Storage", k8s: "Kubernetes" };
+
 export default function RecommendationCard({ rec, onApprove, onReject }) {
   const confidencePct = Math.round(rec.confidence * 100);
 
@@ -19,6 +24,12 @@ export default function RecommendationCard({ rec, onApprove, onReject }) {
         <Pill tone={STATUS_TONE[rec.status]}>{STATUS_LABEL[rec.status]}</Pill>
       </div>
 
+      <div className="reco-tags">
+        <Pill tone={PRIORITY_TONE[rec.priority]}>{PRIORITY_LABEL[rec.priority]}</Pill>
+        <span className="tag-mini">{RESOURCE_TYPE_LABEL[rec.resourceType] || rec.resourceType}</span>
+        {rec.gpuModel && <span className="tag-mini">{rec.gpuModel}</span>}
+      </div>
+
       <p className="reco-cause">{rec.rootCause}</p>
 
       <div className="reco-meta">
@@ -32,7 +43,7 @@ export default function RecommendationCard({ rec, onApprove, onReject }) {
         </div>
         <div className="item">
           <span className="k">Confidence</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="confidence-wrap">
             <div className="confidence-track">
               <div className="confidence-fill" style={{ width: `${confidencePct}%` }} />
             </div>

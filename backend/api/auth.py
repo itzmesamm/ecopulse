@@ -7,11 +7,9 @@ Auth endpoints — org signup + login, backed by Supabase Auth.
   POST /auth/login   -> verifies credentials via Supabase Auth, returns the
                          session (access_token) plus the caller's org_id/role.
 """
-<<<<<<< Updated upstream
-from fastapi import APIRouter, HTTPException, Depends
-=======
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
->>>>>>> Stashed changes
+import datetime
+import json
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -36,32 +34,89 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class CurrentUserResponse(BaseModel):
+    user: dict
+    account: dict
+
+
+class CloudProviderItem(BaseModel):
+    id: str
+    name: str
+    icon: str
+    description: str
+
+
+class ConnectCloudRequest(BaseModel):
+    provider: str
+    credentials: dict = {}
+
+
+class AccessChecklistItem(BaseModel):
+    item: str
+    required: bool
+    status: str
+
+
 @router.post("/signup")
 def signup(payload: SignupRequest, db: Session = Depends(get_db)):
     """Creates a brand-new organization with the caller as its first admin."""
     supabase = get_supabase()
 
-    auth_result = supabase.auth.sign_up({"email": payload.email, "password": payload.password})
+    try:
+        auth_result = supabase.auth.sign_up({
+            "email": payload.email,
+            "password": payload.password,
+        })
+
+    except Exception as exc:
+        message = str(exc)
+        message_lower = message.lower()
+
+        # Supabase signup/email rate limiting
+        if (
+            "rate limit" in message_lower
+            or "too many requests" in message_lower
+            or "for security purposes" in message_lower
+            or "only request this after" in message_lower
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail=message,
+            ) from exc
+
+        # Other Supabase Auth errors
+        raise HTTPException(
+            status_code=502,
+            detail=f"Supabase signup request failed: {message}",
+        ) from exc
+
     if not auth_result.user:
-        raise HTTPException(status_code=400, detail="Supabase signup failed")
+        raise HTTPException(
+            status_code=400,
+            detail="Supabase signup failed",
+        )
 
     org = models.Organization(name=payload.org_name)
     db.add(org)
-    db.flush()  # get org.id
+    db.flush()
 
     profile = models.UserProfile(
         id=auth_result.user.id,
         org_id=org.id,
         full_name=payload.full_name,
-        role="admin",  # first user of a new org is always its admin
+        role="admin",
     )
+
     db.add(profile)
     db.commit()
+
+    session = auth_result.session
 
     return {
         "user_id": auth_result.user.id,
         "org_id": org.id,
         "role": "admin",
+        "access_token": session.access_token if session else None,
         "note": "Check your email to confirm the account if Supabase email confirmation is enabled.",
     }
 
@@ -88,10 +143,6 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         "org_id": profile.org_id,
         "role": profile.role,
     }
-<<<<<<< Updated upstream
-=======
-
-
 # ============================================================================
 # User Profile & Onboarding Endpoints
 # ============================================================================
@@ -113,11 +164,18 @@ def get_current_user(
     org = db.query(models.Organization).filter_by(id=profile.org_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    
+
+    email = ""
+    try:
+        sb_user = get_supabase().auth.admin.get_user_by_id(user_id)
+        email = getattr(getattr(sb_user, "user", None), "email", "") or ""
+    except Exception:
+        email = ""
+
     return CurrentUserResponse(
         user={
             "id": profile.id,
-            "email": user_id,  # Would come from Supabase in production
+            "email": email,
             "fullName": profile.full_name or "",
             "role": profile.role,
         },
@@ -156,6 +214,35 @@ def list_cloud_providers() -> list[CloudProviderItem]:
     ]
 
 
+PROVIDER_LABELS = {
+    "aws": "Amazon Web Services",
+    "gcp": "Google Cloud Platform",
+    "azure": "Microsoft Azure",
+}
+
+
+@router.get("/connected-accounts")
+def list_connected_accounts(
+    org_id: str = Query(..., description="Organization ID"),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    org = db.query(models.Organization).filter_by(id=org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    rows = db.query(models.CloudProvider).filter_by(org_id=org_id).all()
+    return [
+        {
+            "id": row.id,
+            "name": PROVIDER_LABELS.get(row.provider_type, row.provider_type.upper()),
+            "provider": row.provider_type.upper(),
+            "lastSync": row.last_sync.isoformat() if row.last_sync else None,
+            "status": "connected" if row.is_connected else "pending",
+        }
+        for row in rows
+    ]
+
+
 @router.post("/onboarding/connect")
 def connect_cloud_provider(
     provider: str = Query(..., description="Cloud provider type (aws/gcp/azure)"),
@@ -177,9 +264,10 @@ def connect_cloud_provider(
         provider_type=provider
     ).first()
 
+    now = datetime.datetime.utcnow()
     if existing:
         existing.is_connected = True
-        existing.last_sync = datetime.utcnow()
+        existing.last_sync = now
         existing.credentials_encrypted = json.dumps(credentials) if credentials else None
     else:
         cp = models.CloudProvider(
@@ -187,13 +275,15 @@ def connect_cloud_provider(
             provider_type=provider,
             credentials_encrypted=json.dumps(credentials) if credentials else None,
             is_connected=True,
-            last_sync=datetime.utcnow(),
+            last_sync=now,
         )
         db.add(cp)
 
     db.commit()
 
-    ingest_result = ingest_and_persist(db, org_id)
+    has_billing = db.query(models.BillingRecord).filter_by(org_id=org_id).first()
+    ingest_result = {"skipped": True} if has_billing else ingest_and_persist(db, org_id)
+
     analyzer = WasteAnalyzer()
     waste_results = analyzer.analyze_records(db, org_id)
     items_persisted = persist_waste_items(db, org_id, waste_results)
@@ -302,4 +392,3 @@ def get_access_checklist(
     }
     
     return checklists.get(provider, [])
->>>>>>> Stashed changes

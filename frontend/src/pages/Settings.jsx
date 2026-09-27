@@ -5,15 +5,16 @@ import ThemePicker from "../components/settings/ThemePicker";
 import AccountRow from "../components/settings/AccountRow";
 import ToggleRow from "../components/settings/ToggleRow";
 import { api } from "../services/api";
-import { currentUser, currentAccount } from "../data/mockData";
 
 export default function Settings() {
   const [accounts, setAccounts] = useState([]);
   const [types, setTypes] = useState([]);
   const [channels, setChannels] = useState([]);
+  const [profile, setProfile] = useState(null);
 
   useEffect(() => {
     api.getConnectedAccounts().then(setAccounts);
+    api.getCurrentUser().then(setProfile);
     api.getNotificationSettings().then((res) => {
       setTypes(res.types);
       setChannels(res.channels);
@@ -46,17 +47,17 @@ export default function Settings() {
         <div className="desc">Your profile information.</div>
         <div className="toggle-row">
           <div>
-            <div className="t">{currentUser.name}</div>
-            <div className="d">{currentUser.email}</div>
+            <div className="t">{profile?.user.name || "Loading profile..."}</div>
+            <div className="d">{profile?.user.email}</div>
           </div>
-          <span className="pill blue">{currentUser.role}</span>
+          <span className="pill blue">{profile?.user.role || "User"}</span>
         </div>
         <div className="toggle-row">
           <div>
             <div className="t">Primary workspace</div>
-            <div className="d">{currentAccount.name}</div>
+            <div className="d">{profile?.account.name || "Loading workspace..."}</div>
           </div>
-          <span className="pill teal">{currentAccount.provider}</span>
+          <span className="pill teal">{profile?.account.provider || "Cloud"}</span>
         </div>
       </div>
 

@@ -28,7 +28,7 @@
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const MOCK_LATENCY_MS = 260;
-const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA !== "false";
+const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA === "true";
 
 function mockResolve(payload) {
   return new Promise((resolve) => setTimeout(() => resolve(payload), MOCK_LATENCY_MS));
@@ -40,6 +40,12 @@ function getAuthToken() {
 
 function getOrgId() {
   return localStorage.getItem("org_id");
+}
+
+function requireOrgId() {
+  const orgId = getOrgId();
+  if (!orgId) throw new Error("Not authenticated");
+  return orgId;
 }
 
 function getHeaders() {
@@ -142,22 +148,32 @@ function transformStatCards(stats) {
 
 function transformCostTrend(trends) {
   if (!Array.isArray(trends) || trends.length === 0) {
-    return { currentLabel: "$0", actual: [], forecast: [] };
+    return { currentLabel: "$0", actual: [], forecast: [], labels: [] };
   }
 
-  const costs = trends.map((t) => t.cost);
+  const costs = trends.map((t) => Number(t.cost) || 0);
+  const labels = trends.map((t, i) => {
+    const d = new Date(t.date);
+    if (Number.isNaN(d.getTime())) return `D${i + 1}`;
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  });
   const split = Math.max(1, Math.floor(costs.length * 0.7));
   const actual = costs.slice(0, split);
   const lastActual = actual[actual.length - 1] || 0;
   const forecast = costs.slice(split);
   if (forecast.length === 0) {
-    forecast.push(lastActual * 0.9, lastActual * 0.85, lastActual * 0.8);
+    forecast.push(
+      Math.round(lastActual * 0.92),
+      Math.round(lastActual * 0.88),
+      Math.round(lastActual * 0.84)
+    );
   }
 
   return {
     currentLabel: formatUsd(lastActual),
     actual,
     forecast,
+    labels,
   };
 }
 
@@ -190,8 +206,9 @@ function transformRemediationHistory(actions) {
       status: mapped.status,
       tone: mapped.tone,
       icon: "server",
+      createdAt: action.created_at ? new Date(action.created_at).getTime() : 0,
     };
-  });
+  }).sort((a, b) => b.createdAt - a.createdAt || String(b.id).localeCompare(String(a.id)));
 }
 
 function transformWasteByCategory(insights) {
@@ -236,6 +253,84 @@ function transformAccessChecklist(items) {
   }));
 }
 
+function transformServiceBreakdown(insights) {
+  return Object.entries(insights || {}).map(([service, data], index) => ({
+    id: service || `service-${index}`,
+    label: service || "Unknown",
+    cost: Number(data.total_estimated_monthly_waste_usd || 0),
+    tone: wasteTone(service),
+  }));
+}
+
+function transformAnomalies(items) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    id: item.id,
+    score: Number(item.severity_score || 0),
+    resourceId: item.resource_id,
+    message: `${item.waste_type?.replace(/_/g, " ")} · ${item.service || "unknown"}`,
+    detectedAt: item.analyzed_at
+      ? new Date(item.analyzed_at).toLocaleString()
+      : "Recently detected",
+  }));
+}
+
+function recommendationStatus(backendStatus) {
+  if (backendStatus === "completed") return "executed";
+  if (backendStatus === "failed") return "rejected";
+  if (backendStatus === "in_progress") return "pending";
+  return "pending";
+}
+
+function transformRecommendations(items, history = []) {
+  const statusByItem = {};
+  (Array.isArray(history) ? history : []).forEach((action) => {
+    if (action.waste_item_id) {
+      statusByItem[action.waste_item_id] = recommendationStatus(action.status);
+    }
+  });
+
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const severity = Number(item.severity_score || 0);
+    return {
+      id: item.id,
+      resourceId: item.resource_id,
+      resourceType: item.service || "resource",
+      priority: severity >= 0.8 ? "high" : severity >= 0.6 ? "medium" : "low",
+      suggestedAction: `Optimize ${item.service || "resource"}`,
+      rootCause: item.details || item.waste_type?.replace(/_/g, " ") || "Potential cloud waste detected.",
+      dollarSavings: Number(item.estimated_monthly_waste_usd || 0),
+      carbonSavingsKg: Math.round(Number(item.estimated_monthly_waste_usd || 0) * 0.05 * 100) / 100,
+      confidence: severity,
+      status: statusByItem[item.id] || "pending",
+      icon: wasteIcon(item.service),
+      tone: wasteTone(item.service),
+      analyzedAt: item.analyzed_at ? new Date(item.analyzed_at).getTime() : 0,
+    };
+  });
+}
+
+function transformConnectedAccounts(accounts) {
+  return (Array.isArray(accounts) ? accounts : []).map((account) => ({
+    id: account.id,
+    name: account.name,
+    provider: account.provider || account.name,
+    lastSync: account.lastSync
+      ? new Date(account.lastSync).toLocaleString()
+      : "not synced",
+    status: account.status === "connected" ? "connected" : "pending",
+  }));
+}
+
+function transformGreenOpsSummary(summary) {
+  const carbonSavedKg = Number(summary.total_estimated_monthly_waste_usd || 0) * 0.05;
+  return {
+    carbonSavedKg,
+    energyUsageKwh: Math.round(carbonSavedKg * 2),
+    sustainabilityScore: Math.max(0, Math.round(100 - Number(summary.avg_severity_score || 0) * 100)),
+    esgSummary: `${summary.total_waste_items || 0} waste items represent an estimated ${formatUsd(summary.total_estimated_monthly_waste_usd || 0)} in monthly savings potential.`,
+  };
+}
+
 function transformCurrentUser(data) {
   const name = data.user?.fullName || data.user?.name || "User";
   const initials = name
@@ -262,42 +357,41 @@ function transformCurrentUser(data) {
 export const api = {
   getStatCards: () =>
     withFallback(async () => {
-      const org_id = getOrgId();
-      const stats = await fetchAPI(`${BASE_URL}/waste-analytics/dashboard/stats?org_id=${org_id}`);
+      const stats = await fetchAPI(
+        `${BASE_URL}/waste-analytics/dashboard/stats?org_id=${requireOrgId()}`
+      );
       return transformStatCards(stats);
     }, statCards),
 
-  getCostTrend: () =>
+  getCostTrend: (days = 30) =>
     withFallback(async () => {
-      const org_id = getOrgId();
       const trends = await fetchAPI(
-        `${BASE_URL}/waste-analytics/analytics/cost-trend?org_id=${org_id}&days=30`
+        `${BASE_URL}/waste-analytics/analytics/cost-trend?org_id=${requireOrgId()}&days=${days}`
       );
       return transformCostTrend(trends);
     }, costTrend),
 
   getAttentionItems: () =>
     withFallback(async () => {
-      const org_id = getOrgId();
       const items = await fetchAPI(
-        `${BASE_URL}/waste-analytics/items?org_id=${org_id}&min_severity=0.5&limit=5`
+        `${BASE_URL}/waste-analytics/items?org_id=${requireOrgId()}&min_severity=0.5&limit=5`
       );
       return transformAttentionItems(items);
     }, attentionItems),
 
   getRemediationHistory: () =>
     withFallback(async () => {
-      const org_id = getOrgId();
       const actions = await fetchAPI(
-        `${BASE_URL}/waste-analytics/recommendations/history?org_id=${org_id}&limit=10`
+        `${BASE_URL}/waste-analytics/recommendations/history?org_id=${requireOrgId()}&limit=10`
       );
       return transformRemediationHistory(actions);
     }, remediationHistory),
 
   getAiInsight: () =>
     withFallback(async () => {
-      const org_id = getOrgId();
-      const summary = await fetchAPI(`${BASE_URL}/waste-analytics/summary?org_id=${org_id}`);
+      const summary = await fetchAPI(
+        `${BASE_URL}/waste-analytics/summary?org_id=${requireOrgId()}`
+      );
       if (!summary.total_waste_items) {
         return {
           title: "Getting started",
@@ -314,18 +408,13 @@ export const api = {
 
   getOptimizationProgress: () =>
     withFallback(async () => {
-      const org_id = getOrgId();
-      const progress = await fetchAPI(
-        `${BASE_URL}/waste-analytics/greenops/progress?org_id=${org_id}`
-      );
-      return progress;
+      return fetchAPI(`${BASE_URL}/waste-analytics/greenops/progress?org_id=${requireOrgId()}`);
     }, optimizationProgress),
 
   getWasteByCategory: () =>
     withFallback(async () => {
-      const org_id = getOrgId();
       const insights = await fetchAPI(
-        `${BASE_URL}/waste-analytics/insights/by-service?org_id=${org_id}`
+        `${BASE_URL}/waste-analytics/insights/by-service?org_id=${requireOrgId()}`
       );
       return transformWasteByCategory(insights);
     }, wasteByCategory),
@@ -333,6 +422,7 @@ export const api = {
   getCurrentUser: () =>
     withFallback(async () => {
       const user_id = localStorage.getItem("user_id");
+      if (!user_id) throw new Error("Not authenticated");
       const data = await fetchAPI(`${BASE_URL}/auth/me?user_id=${user_id}`);
       return transformCurrentUser(data);
     }, { user: currentUser, account: currentAccount }),
@@ -364,11 +454,9 @@ export const api = {
         body: JSON.stringify({ email, password }),
       });
 
-      if (response.access_token) {
-        localStorage.setItem("auth_token", response.access_token);
-        localStorage.setItem("user_id", response.user_id);
-        localStorage.setItem("org_id", response.org_id);
-      }
+      if (response.access_token) localStorage.setItem("auth_token", response.access_token);
+      if (response.user_id) localStorage.setItem("user_id", response.user_id);
+      if (response.org_id) localStorage.setItem("org_id", response.org_id);
 
       return { ok: true, ...response };
     } catch (e) {
@@ -384,10 +472,9 @@ export const api = {
         body: JSON.stringify({ email, password, org_name, full_name }),
       });
 
-      if (response.user_id && response.org_id) {
-        localStorage.setItem("user_id", response.user_id);
-        localStorage.setItem("org_id", response.org_id);
-      }
+      if (response.access_token) localStorage.setItem("auth_token", response.access_token);
+      if (response.user_id) localStorage.setItem("user_id", response.user_id);
+      if (response.org_id) localStorage.setItem("org_id", response.org_id);
 
       return { ok: true, ...response };
     } catch (e) {
@@ -398,7 +485,7 @@ export const api = {
 
   connectCloud: async (provider, credentials = {}) => {
     try {
-      const org_id = getOrgId();
+      const org_id = requireOrgId();
       const response = await fetchAPI(
         `${BASE_URL}/auth/onboarding/connect?provider=${provider}&org_id=${org_id}`,
         {
@@ -415,7 +502,7 @@ export const api = {
 
   ingestAndAnalyze: async () => {
     try {
-      const org_id = getOrgId();
+      const org_id = requireOrgId();
       await fetchAPI(`${BASE_URL}/ingest?org_id=${org_id}`, { method: "POST" });
       await fetchAPI(`${BASE_URL}/waste-analytics/analyze?org_id=${org_id}`, { method: "POST" });
       return { ok: true };
@@ -438,38 +525,137 @@ export const api = {
   },
 
   getAuthToken,
-    // GET /api/analytics/service-breakdown
-  getServiceBreakdown: () => mockResolve(serviceBreakdown),
 
-  // GET /api/analytics/anomalies
-  getAnomalies: () => mockResolve(anomalies),
+  getServiceBreakdown: () =>
+    withFallback(async () => {
+      const insights = await fetchAPI(
+        `${BASE_URL}/waste-analytics/insights/by-service?org_id=${requireOrgId()}`
+      );
+      return transformServiceBreakdown(insights);
+    }, serviceBreakdown),
 
-  // GET /api/analytics/forecast-accuracy
-  getForecastAccuracy: () => mockResolve(forecastAccuracy),
+  getAnomalies: () =>
+    withFallback(async () => {
+      const items = await fetchAPI(
+        `${BASE_URL}/waste-analytics/items?org_id=${requireOrgId()}&min_severity=0.6&limit=10`
+      );
+      return transformAnomalies(items);
+    }, anomalies),
 
-  // GET /api/recommendations
-  getRecommendations: () => mockResolve(recommendations),
+  getForecastAccuracy: () =>
+    withFallback(async () => {
+      const metrics = await fetchAPI(
+        `${BASE_URL}/waste-analytics/forecast-accuracy?org_id=${requireOrgId()}`
+      );
+      return {
+        mape: Number(metrics.mape || 0),
+        precision: Number(metrics.precision || 0),
+        recall: Number(metrics.recall || 0),
+        accuracy: Number(metrics.accuracy || 0),
+        trend: metrics.trend || "stable",
+      };
+    }, forecastAccuracy),
 
-  // POST /api/recommendations/:id/approve | /reject
-  updateRecommendationStatus: (id, status) => mockResolve({ id, status }),
+  getRecommendations: (filters = {}) =>
+    withFallback(async () => {
+      const org_id = requireOrgId();
+      const priority = filters.priority && filters.priority !== "all" ? `&priority=${filters.priority}` : "";
+      const resourceType = filters.resourceType && filters.resourceType !== "all"
+        ? `&resource_type=${encodeURIComponent(filters.resourceType)}`
+        : "";
+      const backendSort = filters.savingsOrder === "lowest" ? "savings_asc" : "savings";
+      const [items, history] = await Promise.all([
+        fetchAPI(`${BASE_URL}/waste-analytics/items?org_id=${org_id}&min_severity=0.5&limit=10&sort_by=${backendSort}${priority}${resourceType}`),
+        fetchAPI(`${BASE_URL}/waste-analytics/recommendations/history?org_id=${org_id}&limit=50&sort_by=created_at`),
+      ]);
+      return transformRecommendations(items, history);
+    }, recommendations),
 
-  // GET /api/alerts
-  getAlerts: () => mockResolve(alerts),
+  updateRecommendationStatus: async (id, status) => {
+    const org_id = requireOrgId();
+    return fetchAPI(`${BASE_URL}/waste-analytics/recommendations/${id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status, org_id }),
+    });
+  },
 
-  // GET /api/greenops/summary
-  getGreenOpsSummary: () => mockResolve(greenOpsSummary),
+  getAlerts: () =>
+    withFallback(async () => {
+      const items = await fetchAPI(
+        `${BASE_URL}/waste-analytics/items?org_id=${requireOrgId()}&min_severity=0.8&limit=20`
+      );
+      return transformAnomalies(items).map((item) => ({
+        id: item.id,
+        type: "anomaly",
+        severity: item.score >= 0.9 ? "critical" : "warning",
+        message: `${item.resourceId}: ${item.message}`,
+        channel: "email",
+        sentAt: item.detectedAt,
+      }));
+    }, alerts),
 
-  // GET /api/greenops/breakdown
-  getEsgBreakdown: () => mockResolve(esgBreakdown),
+  getGreenOpsSummary: () =>
+    withFallback(async () => {
+      const summary = await fetchAPI(
+        `${BASE_URL}/waste-analytics/summary?org_id=${requireOrgId()}`
+      );
+      return transformGreenOpsSummary(summary);
+    }, greenOpsSummary),
 
-  // GET /api/settings/accounts
-  getConnectedAccounts: () => mockResolve(connectedAccounts),
+  getEsgBreakdown: () =>
+    withFallback(async () => {
+      const insights = await fetchAPI(
+        `${BASE_URL}/waste-analytics/insights/by-environment?org_id=${requireOrgId()}`
+      );
+      const total =
+        Object.values(insights || {}).reduce(
+          (sum, item) => sum + Number(item.total_estimated_monthly_waste_usd || 0),
+          0
+        ) || 1;
+      return Object.entries(insights || {}).map(([environment, item], index) => ({
+        id: environment || `environment-${index}`,
+        label: environment || "Unknown",
+        pct: Math.round((Number(item.total_estimated_monthly_waste_usd || 0) / total) * 100),
+        tone: wasteTone(environment),
+      }));
+    }, esgBreakdown),
 
-  // GET /api/settings/notifications
-  getNotificationSettings: () => mockResolve({ types: notificationSettings, channels: notificationChannels }),
+  getConnectedAccounts: () =>
+    withFallback(async () => {
+      const accounts = await fetchAPI(
+        `${BASE_URL}/auth/connected-accounts?org_id=${requireOrgId()}`
+      );
+      return transformConnectedAccounts(accounts);
+    }, connectedAccounts),
 
-  // POST /api/settings/notifications
-  updateNotificationSetting: (id, enabled) => mockResolve({ id, enabled }),
+  getNotificationSettings: () => {
+    const raw = localStorage.getItem("notification_settings");
+    if (raw) {
+      try {
+        return Promise.resolve(JSON.parse(raw));
+      } catch {
+        /* fall through */
+      }
+    }
+    return mockResolve({ types: notificationSettings, channels: notificationChannels });
+  },
+
+  updateNotificationSetting: (id, enabled) => {
+    const raw = localStorage.getItem("notification_settings");
+    let settings = { types: notificationSettings, channels: notificationChannels };
+    if (raw) {
+      try {
+        settings = JSON.parse(raw);
+      } catch {
+        /* keep defaults */
+      }
+    }
+    settings.types = (settings.types || []).map((t) => (t.id === id ? { ...t, enabled } : t));
+    settings.channels = (settings.channels || []).map((c) => (c.id === id ? { ...c, enabled } : c));
+    localStorage.setItem("notification_settings", JSON.stringify(settings));
+    return Promise.resolve({ id, enabled });
+  },
 };
+
 
 export { BASE_URL };

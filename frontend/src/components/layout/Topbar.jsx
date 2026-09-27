@@ -1,8 +1,10 @@
 import { Icon } from "../ui/Icon";
 import ThemeToggle from "../ui/ThemeToggle";
-import { currentUser } from "../../data/mockData";
+import { useUser } from "../../context/UserContext";
 
 export default function Topbar({ title }) {
+  const { user } = useUser();
+
   return (
     <div className="topbar">
       <h1>{title}</h1>
@@ -21,10 +23,10 @@ export default function Topbar({ title }) {
         </button>
 
         <div className="profile-chip">
-          <div className="av">{currentUser.initials}</div>
+          <div className="av">{user.initials}</div>
           <div>
-            <div className="name">{currentUser.name}</div>
-            <div className="role">{currentUser.role}</div>
+            <div className="name">{user.name}</div>
+            <div className="role">{user.role}</div>
           </div>
         </div>
       </div>

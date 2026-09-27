@@ -11,10 +11,13 @@ import WasteByCategory from "../components/dashboard/WasteByCategory";
 import AssistantFab from "../components/dashboard/AssistantFab";
 import { Icon } from "../components/ui/Icon";
 import { api } from "../services/api";
+import { useUser } from "../context/UserContext";
 
 const RANGES = ["7 days", "30 days", "90 days"];
+const RANGE_DAYS = { "7 days": 7, "30 days": 30, "90 days": 90 };
 
 export default function Dashboard() {
+  const { account } = useUser();
   const [stats, setStats] = useState(null);
   const [trend, setTrend] = useState(null);
   const [attention, setAttention] = useState([]);
@@ -24,44 +27,56 @@ export default function Dashboard() {
   const [waste, setWaste] = useState([]);
   const [range, setRange] = useState("30 days");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError("");
 
     Promise.all([
       api.getStatCards(),
-      api.getCostTrend(),
+      api.getCostTrend(RANGE_DAYS[range] || 30),
       api.getAttentionItems(),
       api.getRemediationHistory(),
       api.getAiInsight(),
       api.getOptimizationProgress(),
       api.getWasteByCategory(),
-    ]).then(([s, t, a, h, i, g, w]) => {
-      if (cancelled) return;
-      setStats(s);
-      setTrend(t);
-      setAttention(a);
-      setHistory(h);
-      setInsight(i);
-      setGoals(g);
-      setWaste(w);
-      setLoading(false);
-    });
+    ])
+      .then(([s, t, a, h, i, g, w]) => {
+        if (cancelled) return;
+        setStats(s);
+        setTrend(t);
+        setAttention(a);
+        setHistory(h);
+        setInsight(i);
+        setGoals(g);
+        setWaste(w);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message || "Failed to load dashboard");
+        setLoading(false);
+      });
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [range]);
 
   return (
     <AppShell>
       <Topbar title="Overview" />
 
+      {error && (
+        <div style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{error}</div>
+      )}
+
       <div className="welcome-row">
         <div>
           <div style={{ color: "var(--text-2)", fontSize: 13.5 }}>
-            Welcome back — here's how meridian-prod is trending.
+            Welcome back !! Here's how {account?.name || "your workspace"} is trending.
           </div>
         </div>
         <div className="selects">

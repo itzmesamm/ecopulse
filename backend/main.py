@@ -9,7 +9,9 @@ Currently wires up:
 Run with: uvicorn backend.main:app --reload
 Docs at:  http://localhost:8000/docs
 """
+import os
 from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from backend.db.database import Base, engine, get_db
@@ -20,14 +22,20 @@ from backend.ingestion.persist import ingest_and_persist
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="EcoPulse", description="AI-powered FinOps and GreenOps platform", version="0.1.0")
-<<<<<<< Updated upstream
-=======
 
 # CORS configuration
-cors_origins = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:5174,http://localhost:3000",
-).split(",")
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,"
+        "http://localhost:5174,"
+        "http://localhost:3000,"
+        "http://127.0.0.1:5173,"
+        "http://127.0.0.1:5174,"
+        "http://127.0.0.1:3000",
+    ).split(",")
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -36,7 +44,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
->>>>>>> Stashed changes
 app.include_router(auth_router)
 app.include_router(waste_analytics_router)
 

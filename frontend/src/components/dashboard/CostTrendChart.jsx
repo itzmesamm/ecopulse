@@ -14,16 +14,22 @@ const MONTHS = ["Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "
 export default function CostTrendChart({ data }) {
   const chartData = useMemo(() => {
     if (!data) return [];
-    const { actual, forecast } = data;
-    const points = actual.map((v, i) => ({ month: MONTHS[i] || `M${i}`, actual: v, forecast: null }));
+    const { actual = [], forecast = [], labels = [] } = data;
+    const points = actual.map((v, i) => ({
+      month: labels[i] || MONTHS[i] || `M${i}`,
+      actual: v,
+      forecast: null,
+    }));
 
-    // seam point carries both values so the forecast line visually
-    // connects to where the actual line ends
     if (points.length) points[points.length - 1].forecast = points[points.length - 1].actual;
 
     forecast.forEach((v, i) => {
       const idx = actual.length + i;
-      points.push({ month: MONTHS[idx] || `M${idx}`, actual: null, forecast: v });
+      points.push({
+        month: labels[idx] || MONTHS[idx] || `F${i + 1}`,
+        actual: null,
+        forecast: v,
+      });
     });
 
     return points;

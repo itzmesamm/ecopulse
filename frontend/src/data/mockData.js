@@ -166,3 +166,118 @@ export const notificationChannels = [
   { id: "slack", label: "Slack", desc: "#finops-alerts webhook", enabled: true },
   { id: "email", label: "Email", desc: "nikita@meridian.io", enabled: true },
 ];
+
+export const serviceBreakdown = [
+  { id: "compute", label: "Compute", cost: 12000, tone: "blue" },
+  { id: "storage", label: "Storage", cost: 5400, tone: "purple" },
+];
+
+export const anomalies = [
+  { id: "anomaly-1", score: 0.82, resourceId: "gpu-04", message: "Low utilization", detectedAt: "Recently detected" },
+];
+
+export const forecastAccuracy = { accuracy: 92, mape: 8, precision: 0.86, recall: 0.81, trend: "stable" };
+
+export const recommendations = [
+  {
+    id: "rec-1",
+    resourceId: "gpu-04",
+    rootCause: "GPU has shown 0% utilization for 36 consecutive hours with no scheduled jobs in the queue.",
+    dollarSavings: 310,
+    carbonSavingsKg: 42,
+    confidence: 0.92,
+    suggestedAction: "Stop idle GPU instance",
+    status: "pending",
+    icon: "server",
+    tone: "orange",
+    resourceType: "gpu",
+    gpuModel: "T4",
+    priority: "high",
+  },
+  {
+    id: "rec-2",
+    resourceId: "i-8f3a21bc",
+    rootCause: "Instance is provisioned for 16 vCPUs but sustained CPU usage has stayed below 8% for two weeks.",
+    dollarSavings: 142,
+    carbonSavingsKg: 18,
+    confidence: 0.81,
+    suggestedAction: "Resize to smaller instance type",
+    status: "pending",
+    icon: "monitor",
+    tone: "blue",
+    resourceType: "compute",
+    gpuModel: null,
+    priority: "medium",
+  },
+  {
+    id: "rec-3",
+    resourceId: "vol-9c21",
+    rootCause: "EBS volume has recorded zero read/write I/O for 14 consecutive days and is not attached to any running instance.",
+    dollarSavings: 58,
+    carbonSavingsKg: 6,
+    confidence: 0.95,
+    suggestedAction: "Delete unattached volume",
+    status: "executed",
+    icon: "database",
+    tone: "purple",
+    resourceType: "storage",
+    gpuModel: null,
+    priority: "low",
+  },
+  {
+    id: "rec-4",
+    resourceId: "pod-cluster-b",
+    rootCause: "Three replicas in namespace 'staging' have restarted repeatedly with low memory pressure, indicating over-provisioned requests.",
+    dollarSavings: 96,
+    carbonSavingsKg: 11,
+    confidence: 0.68,
+    suggestedAction: "Right-size memory requests",
+    status: "pending",
+    icon: "boxes",
+    tone: "teal",
+    resourceType: "k8s",
+    gpuModel: null,
+    priority: "medium",
+  },
+  {
+    id: "rec-5",
+    resourceId: "gpu-11",
+    rootCause: "Inference latency and memory footprint on this job are well within T4 limits — the workload doesn't need A100-class compute to meet its SLA.",
+    dollarSavings: 480,
+    carbonSavingsKg: 65,
+    confidence: 0.88,
+    suggestedAction: "Migrate A100 workload to T4 instance",
+    status: "pending",
+    icon: "server",
+    tone: "orange",
+    resourceType: "gpu",
+    gpuModel: "A100",
+    priority: "high",
+  },
+];
+
+export const alerts = [
+  { id: "alert-1", type: "anomaly", severity: "warning", message: "High-severity waste detected", channel: "email", sentAt: "Recently" },
+];
+
+export const greenOpsSummary = {
+  carbonSavedKg: 2100,
+  energyUsageKwh: 4200,
+  sustainabilityScore: 78,
+  esgSummary: "Connect a cloud account to calculate your current environmental impact.",
+};
+
+export const esgBreakdown = [
+  { id: "compute", label: "Compute", pct: 50, tone: "blue" },
+  { id: "storage", label: "Storage", pct: 30, tone: "purple" },
+  { id: "network", label: "Network", pct: 20, tone: "teal" },
+];
+
+export const connectedAccounts = [
+  { id: "aws", name: "AWS", provider: "AWS", lastSync: "not synced", status: "pending" },
+];
+
+export const notificationSettings = [
+  { id: "anomaly", label: "Anomalies", desc: "Unexpected usage or cost changes", enabled: true },
+  { id: "budget", label: "Budget alerts", desc: "Monthly budget thresholds", enabled: true },
+];

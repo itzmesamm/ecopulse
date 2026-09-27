@@ -1,6 +1,10 @@
 function formatValue(v, unit) {
-  if (unit) return `${v}${unit === "t CO\u2082" ? "t" : unit}`;
-  return `$${v.toLocaleString()}`;
+  const n = Number(v) || 0;
+  if (unit) {
+    const suffix = unit.includes("CO") ? "t" : unit;
+    return `${n}${suffix}`;
+  }
+  return `$${n.toLocaleString()}`;
 }
 
 export default function OptimizationProgress({ goals }) {

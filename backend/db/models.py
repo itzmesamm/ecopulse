@@ -16,7 +16,7 @@ anomalies, log_embeddings, alerts) will be added when we build those layers.
 """
 import datetime
 import uuid
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from backend.db.database import Base
 
@@ -53,6 +53,21 @@ class UserProfile(Base):
     org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
     full_name = Column(String, nullable=True)
     role = Column(String, default="viewer")  # admin | approver | viewer
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    organization = relationship("Organization")
+
+
+class CloudProvider(Base):
+    """A connected cloud account for an organization."""
+    __tablename__ = "cloud_providers"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    provider_type = Column(String, nullable=False)  # aws | gcp | azure
+    credentials_encrypted = Column(Text, nullable=True)
+    is_connected = Column(Boolean, default=True)
+    last_sync = Column(DateTime, default=datetime.datetime.utcnow)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     organization = relationship("Organization")
@@ -141,4 +156,21 @@ class WasteItem(Base):
     estimated_monthly_waste_usd = Column(Float, nullable=False)
     details = Column(Text, nullable=True)  # JSON or free-form notes about the waste
     analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RemediationAction(Base):
+    """An approve/reject/execute action taken against a waste finding."""
+    __tablename__ = "remediation_actions"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    waste_item_id = Column(String, ForeignKey("waste_items.id"), nullable=True)
+    action_type = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    estimated_savings_usd = Column(Float, default=0)
+    status = Column(String, default="pending")  # pending | in_progress | completed | failed
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    organization = relationship("Organization")
+    waste_item = relationship("WasteItem")
 
