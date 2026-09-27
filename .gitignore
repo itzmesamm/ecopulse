@@ -9,3 +9,6 @@ ecopulse.db
 # Frontend dependencies and build/cache files
 frontend/node_modules/
 frontend/dist/
+
+frontend/.env
+frontend/.env.local

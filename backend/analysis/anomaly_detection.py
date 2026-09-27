@@ -145,11 +145,21 @@ def detect_anomalies(
 
 
 def persist_anomaly_findings(db: Session, org_id: str, findings: List[AnomalyFindingResult]) -> int:
-    """Persist anomaly findings to the database."""
+    """Upsert anomaly findings for a resource measurement."""
     count = 0
     for finding in findings:
-        db.add(
-            models.AnomalyFinding(
+        existing = db.query(models.AnomalyFinding).filter(
+            models.AnomalyFinding.org_id == org_id,
+            models.AnomalyFinding.resource_id == finding.resource_id,
+            models.AnomalyFinding.cost == finding.cost,
+            models.AnomalyFinding.usage_hours == finding.usage_hours,
+        ).first()
+        if existing:
+            existing.anomaly_score = finding.anomaly_score
+            existing.severity_score = finding.severity_score
+            existing.details = finding.details
+        else:
+            db.add(models.AnomalyFinding(
                 org_id=org_id,
                 resource_id=finding.resource_id,
                 service=finding.service,
@@ -160,8 +170,7 @@ def persist_anomaly_findings(db: Session, org_id: str, findings: List[AnomalyFin
                 anomaly_score=finding.anomaly_score,
                 severity_score=finding.severity_score,
                 details=finding.details,
-            )
-        )
+            ))
         count += 1
     db.commit()
     return count

@@ -5,6 +5,8 @@
 GET /waste-analytics/items/advanced
 ```
 
+All non-auth API endpoints require `Authorization: Bearer <Supabase access token>`. The organization must belong to the authenticated user's profile; the API rejects missing `org_id` with HTTP 400 and cross-organization access with HTTP 403.
+
 ## Required Parameters
 - `org_id` (string): Your organization ID
 

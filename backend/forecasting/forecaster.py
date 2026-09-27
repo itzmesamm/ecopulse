@@ -20,6 +20,11 @@ from backend.forecasting.aggregator import (
     get_date_range_with_data,
 )
 
+try:
+    from prophet import Prophet
+except ImportError:  # pragma: no cover - optional in minimal/offline environments
+    Prophet = None
+
 
 # ============================================================================
 # Data Models
@@ -235,16 +240,44 @@ def forecast_costs(
     trend_slope = _linear_regression_slope(cost_values)
     trend_dir = _trend_direction(trend_slope)
     
-    # Generate forecasts
+    # Prophet models weekly patterns and returns learned uncertainty intervals.
+    prophet_forecasts = None
+    if Prophet is not None and len(cost_values) >= 14:
+        try:
+            import pandas as pd
+
+            training = pd.DataFrame({"ds": date_range, "y": cost_values})
+            model = Prophet(
+                weekly_seasonality=True,
+                yearly_seasonality=len(cost_values) >= 365,
+                daily_seasonality=False,
+                interval_width=0.8,
+            )
+            model.fit(training)
+            future = model.make_future_dataframe(periods=forecast_days, include_history=True)
+            prediction = model.predict(future).tail(forecast_days)
+            prophet_forecasts = [
+                (
+                    max(0.0, float(row.yhat)),
+                    max(0.0, float(row.yhat_lower)),
+                    max(0.0, float(row.yhat_upper)),
+                )
+                for row in prediction.itertuples(index=False)
+            ]
+        except Exception:
+            prophet_forecasts = None
+
     forecasts = []
     last_date = latest_date
     
     for day_offset in range(1, forecast_days + 1):
         forecast_date = last_date + timedelta(days=day_offset)
         
-        # Forecast = baseline + trend
-        forecasted_cost = max(0.0, avg_cost + (trend_slope * day_offset))
-        lower_bound, upper_bound = _confidence_interval(forecasted_cost, confidence_pct=0.15)
+        if prophet_forecasts is not None:
+            forecasted_cost, lower_bound, upper_bound = prophet_forecasts[day_offset - 1]
+        else:
+            forecasted_cost = max(0.0, avg_cost + (trend_slope * day_offset))
+            lower_bound, upper_bound = _confidence_interval(forecasted_cost, confidence_pct=0.15)
         
         forecasts.append(
             CostForecast(

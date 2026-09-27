@@ -27,6 +27,21 @@ export default function Login() {
     navigate("/dashboard");
   }
 
+  async function handleDemoLogin() {
+    setSubmitting(true);
+    setError("");
+    const result = await api.demoLogin();
+    if (!result.ok) {
+      setSubmitting(false);
+      setError(result.error || "Demo login unavailable.");
+      return;
+    }
+    // Seed synthetic data + AI recommendations for a working prototype.
+    await api.ingestAndAnalyze();
+    setSubmitting(false);
+    navigate("/dashboard");
+  }
+
   return (
     <AuthLayout>
       <div className="card auth-card">
@@ -72,6 +87,16 @@ export default function Login() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
         </form>
+
+        <button
+          type="button"
+          className="btn btn-ghost btn-block"
+          style={{ marginTop: 12 }}
+          disabled={submitting}
+          onClick={handleDemoLogin}
+        >
+          {submitting ? "Preparing demo…" : "Continue with synthetic demo"}
+        </button>
 
         <div className="auth-foot">
           Don't have an account? <a onClick={() => navigate("/signup")}>Start free trial</a>

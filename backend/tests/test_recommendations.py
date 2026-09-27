@@ -10,7 +10,7 @@ from backend.main import app
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
 def test_generate_recommendations_returns_fallback_payload(client, db_session):
@@ -18,6 +18,8 @@ def test_generate_recommendations_returns_fallback_payload(client, db_session):
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
+    db_session.add(models.UserProfile(id="test-user", org_id=org.id, role="admin"))
+    db_session.commit()
 
     db_session.add(
         models.BillingRecord(

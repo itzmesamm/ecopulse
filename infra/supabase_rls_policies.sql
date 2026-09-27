@@ -1,5 +1,4 @@
--- Run this in Supabase SQL Editor AFTER the backend has created tables
--- (i.e. after Base.metadata.create_all() has run once against your Supabase DB).
+-- Run this in Supabase SQL Editor AFTER `alembic upgrade head`.
 --
 -- What this does: enforces "you can only see rows belonging to your own org"
 -- at the database level, so even if application code has a bug, one
@@ -9,6 +8,8 @@ create or replace function auth_org_id()
 returns text
 language sql
 stable
+security definer
+set search_path = public
 as $$
   select org_id from user_profiles where id = auth.uid()::text
 $$;
@@ -17,6 +18,8 @@ alter table billing_records enable row level security;
 alter table gpu_metrics enable row level security;
 alter table k8s_metrics enable row level security;
 alter table operational_logs enable row level security;
+alter table infrastructure_metrics enable row level security;
+alter table ingestion_records enable row level security;
 alter table user_profiles enable row level security;
 
 create policy org_isolation_billing on billing_records
@@ -29,6 +32,12 @@ create policy org_isolation_k8s on k8s_metrics
   for all using (org_id = auth_org_id());
 
 create policy org_isolation_logs on operational_logs
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_infrastructure on infrastructure_metrics
+  for all using (org_id = auth_org_id());
+
+create policy org_isolation_ingestion_records on ingestion_records
   for all using (org_id = auth_org_id());
 
 create policy org_isolation_profiles on user_profiles

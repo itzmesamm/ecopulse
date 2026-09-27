@@ -12,8 +12,9 @@ from __future__ import annotations
 
 
 def requires_approval(environment: str | None) -> bool:
-    """Production resources require human approval."""
-    return (environment or "").lower() == "production"
+    """Only explicitly non-production environments can be auto-approved."""
+    normalized = (environment or "").strip().lower()
+    return normalized not in {"sandbox", "development", "dev", "test"}
 
 
 def decision_for_recommendation(*, environment: str | None, user_role: str | None) -> str:
@@ -23,16 +24,13 @@ def decision_for_recommendation(*, environment: str | None, user_role: str | Non
       - 'pending_approval'
       - 'denied'
     """
-    # For minimal dry-run integration:
-    # - Production always requires approval gate (pending_approval).
-    # - Non-production can be executed (dry-run).
     if requires_approval(environment):
         return "pending_approval"
 
-    # Non-prod execution is allowed regardless of role in this minimal model.
-    # Later you can gate based on resource tags / IAM.
-    _ = user_role
-    return "executed"
+    role = (user_role or "").lower()
+    if role in {"admin", "approver", "system"}:
+        return "executed"
+    return "denied"
 
 
 def can_approve_in_production(*, user_role: str | None) -> bool:

@@ -17,8 +17,7 @@ anomalies, log_embeddings, alerts) will be added when we build those layers.
 import datetime
 import json
 import uuid
-from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Text
-from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import relationship
@@ -59,7 +58,11 @@ class Vector384(UserDefinedType):
 
 @compiles(Vector384, "postgresql")
 def compile_vector384(type_, compiler, **kwargs):
-    return "vector(384)"
+    import os
+
+    if os.getenv("ECOPULSE_PGVECTOR_AVAILABLE", "true").lower() == "true":
+        return "vector(384)"
+    return "TEXT"
 
 
 # ---------------------------------------------------------------------------
@@ -77,17 +80,18 @@ class Organization(Base):
 
 class UserProfile(Base):
     """
-    App-level profile for a Supabase Auth user.
+    Local app user stored in Postgres.
 
-    id is NOT auto-generated — it must equal the id of the corresponding row
-    in Supabase's own `auth.users` table (managed entirely by Supabase Auth
-    in a separate schema, so we don't declare a SQLAlchemy ForeignKey to it —
-    we just store the matching UUID and rely on the signup flow to set it).
+    Credentials live in this table (email + password_hash). Access tokens are
+    HMAC-signed locally — Supabase Auth is not required.
     """
     __tablename__ = "user_profiles"
+    __table_args__ = (UniqueConstraint("email", name="uq_user_profiles_email"),)
 
-    id = Column(String, primary_key=True)  # == supabase auth.users.id
+    id = Column(String, primary_key=True, default=_uuid)
     org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    email = Column(String, nullable=True)
+    password_hash = Column(String, nullable=True)
     full_name = Column(String, nullable=True)
     role = Column(String, default="viewer")  # admin | approver | viewer
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -146,6 +150,20 @@ class GPUMetric(Base):
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
+class InfrastructureMetric(Base):
+    __tablename__ = "infrastructure_metrics"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    host_id = Column(String, nullable=False)
+    cpu_pct = Column(Float, nullable=True)
+    memory_pct = Column(Float, nullable=True)
+    disk_pct = Column(Float, nullable=True)
+    network_receive_bytes_per_second = Column(Float, nullable=True)
+    network_transmit_bytes_per_second = Column(Float, nullable=True)
+    recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 class K8sMetric(Base):
     __tablename__ = "k8s_metrics"
 
@@ -167,6 +185,19 @@ class OperationalLog(Base):
     message = Column(Text, nullable=False)
     severity = Column(String, default="INFO")
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class IngestionRecord(Base):
+    """Idempotency ledger for persisted source events."""
+
+    __tablename__ = "ingestion_records"
+    __table_args__ = (UniqueConstraint("org_id", "source", "source_key", name="uq_ingestion_event"),)
+
+    id = Column(String, primary_key=True, default=_uuid)
+    org_id = Column(String, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String, nullable=False)
+    source_key = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class LogEmbedding(Base):

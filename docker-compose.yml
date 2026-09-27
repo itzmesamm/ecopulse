@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ecopulse
+      POSTGRES_USER: ecopulse
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD:-ecopulse-local-only}
+    ports:
+      - "55432:5432"
+    volumes:
+      - ecopulse-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecopulse -d ecopulse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - ecopulse-redis:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ecopulse-ollama:/root/.ollama
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ecopulse-prometheus:/prometheus
+
+  loki:
+    image: grafana/loki:3.1.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - ecopulse-loki:/loki
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=:9100
+    ports:
+      - "9100:9100"
+    volumes:
+      - /:/host:ro,rslave
+    profiles: ["metrics"]
+
+volumes:
+  ecopulse-postgres:
+  ecopulse-redis:
+  ecopulse-ollama:
+  ecopulse-prometheus:
+  ecopulse-loki:

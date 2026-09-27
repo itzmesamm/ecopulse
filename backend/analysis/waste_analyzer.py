@@ -12,6 +12,7 @@ Key heuristics:
 All thresholds and waste percentages are configurable via strategy constants.
 """
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy.orm import Session
 
@@ -65,7 +66,7 @@ class WasteAnalyzer:
         Returns the highest-severity result, or None if no waste detected.
         Ensures returned values are never negative.
         """
-        if not billing_record.cost or not billing_record.usage_hours:
+        if billing_record.cost is None or billing_record.cost <= 0:
             return None
         
         results = []
@@ -85,17 +86,59 @@ class WasteAnalyzer:
         
         Returns a list of detected waste items, highest-severity first.
         """
-        # Get all billing records for this org (latest batch)
-        # In production, you'd filter by date range or fetch only recent records
+        # Analyze only the latest measurement per resource; older billing rows
+        # remain available for forecasting but should not create duplicate alerts.
         records = db.query(models.BillingRecord).filter(
             models.BillingRecord.org_id == org_id
         ).all()
+        latest_records = {}
+        for record in records:
+            previous = latest_records.get(record.resource_id)
+            if previous is None or (record.recorded_at or datetime.min) > (previous.recorded_at or datetime.min):
+                latest_records[record.resource_id] = record
+
+        infra_metrics = db.query(models.InfrastructureMetric).filter(
+            models.InfrastructureMetric.org_id == org_id
+        ).all()
+        infra_by_host = {}
+        for metric in infra_metrics:
+            previous = infra_by_host.get(metric.host_id)
+            if previous is None or (metric.recorded_at or datetime.min) > (previous.recorded_at or datetime.min):
+                infra_by_host[metric.host_id] = metric
+        infra_logs = db.query(models.OperationalLog).filter(
+            models.OperationalLog.org_id == org_id
+        ).all()
         
         results = []
-        for record in records:
+        for record in latest_records.values():
             result = self.analyze_record(record)
             if result:
                 results.append(result)
+                continue
+
+            metric = infra_by_host.get(record.resource_id)
+            if not metric or metric.cpu_pct is None or metric.cpu_pct > 5 or record.cost is None or record.cost <= 0:
+                continue
+            metric_time = metric.recorded_at or datetime.utcnow()
+            matching_idle_log = any(
+                record.resource_id.lower() in (log.message or "").lower()
+                and "idle" in (log.message or "").lower()
+                and abs(metric_time - (log.recorded_at or metric_time)) <= timedelta(minutes=30)
+                for log in infra_logs
+            )
+            if matching_idle_log:
+                estimated_waste = max(0.0, float(record.cost) * 0.5)
+                if estimated_waste > 0:
+                    results.append(WasteAnalysisResult(
+                        resource_id=record.resource_id,
+                        waste_type="infrastructure_idle",
+                        severity_score=0.85,
+                        estimated_monthly_waste_usd=round(estimated_waste, 2),
+                        details=(
+                            f"Cost-bearing resource {record.resource_id} has {metric.cpu_pct:.1f}% CPU utilization "
+                            "and a recent matching idle log; both signals support an idle-resource finding."
+                        ),
+                    ))
         
         # Sort by severity descending
         results.sort(key=lambda r: r.severity_score, reverse=True)
@@ -239,22 +282,14 @@ def persist_waste_items(db: Session, org_id: str, waste_results: list[WasteAnaly
     """
     Persist detected waste items to the database.
 
-    Replaces prior analysis results for the org so reconnect/analyze
-    does not duplicate findings.
+    Upserts by (org, resource, waste_type) so reconnect/analyze and the
+    recommendation pipeline can re-run without wiping linked remediations.
     """
-    db.query(models.RemediationAction).filter(
-        models.RemediationAction.org_id == org_id
-    ).delete(synchronize_session=False)
-    db.query(models.WasteItem).filter(
-        models.WasteItem.org_id == org_id
-    ).delete(synchronize_session=False)
-
-    billing_records = {
-        r.resource_id: r
-        for r in db.query(models.BillingRecord).filter(
-            models.BillingRecord.org_id == org_id
-        ).all()
-    }
+    billing_records = {}
+    for record in db.query(models.BillingRecord).filter(
+        models.BillingRecord.org_id == org_id
+    ).order_by(models.BillingRecord.recorded_at.desc()).all():
+        billing_records.setdefault(record.resource_id, record)
 
     count = 0
     for result in waste_results:
@@ -265,19 +300,34 @@ def persist_waste_items(db: Session, org_id: str, waste_results: list[WasteAnaly
         severity = _clamp_score(result.severity_score)
         waste_usd = _ensure_positive(result.estimated_monthly_waste_usd)
 
-        waste_item = models.WasteItem(
-            org_id=org_id,
-            billing_record_id=billing_record.id,
-            resource_id=result.resource_id,
-            service=billing_record.service,
-            region=billing_record.region,
-            environment=billing_record.environment,
-            waste_type=result.waste_type,
-            severity_score=severity,
-            estimated_monthly_waste_usd=waste_usd,
-            details=result.details,
-        )
-        db.add(waste_item)
+        waste_item = db.query(models.WasteItem).filter(
+            models.WasteItem.org_id == org_id,
+            models.WasteItem.resource_id == result.resource_id,
+            models.WasteItem.waste_type == result.waste_type,
+        ).first()
+        if waste_item is None:
+            waste_item = models.WasteItem(
+                org_id=org_id,
+                billing_record_id=billing_record.id,
+                resource_id=result.resource_id,
+                service=billing_record.service,
+                region=billing_record.region,
+                environment=billing_record.environment,
+                waste_type=result.waste_type,
+                severity_score=severity,
+                estimated_monthly_waste_usd=waste_usd,
+                details=result.details,
+            )
+            db.add(waste_item)
+        else:
+            waste_item.billing_record_id = billing_record.id
+            waste_item.service = billing_record.service
+            waste_item.region = billing_record.region
+            waste_item.environment = billing_record.environment
+            waste_item.severity_score = severity
+            waste_item.estimated_monthly_waste_usd = waste_usd
+            waste_item.details = result.details
+            waste_item.analyzed_at = __import__("datetime").datetime.utcnow()
         count += 1
 
     db.commit()
