@@ -130,6 +130,44 @@ def index_logs(
     return LogIndexResponse(org_id=org_id, embedded_logs=embedded_logs)
 
 
+class RecommendationStatusRequest(BaseModel):
+    org_id: str
+    status: str
+
+
+@router.post("/{recommendation_id}/status")
+def update_recommendation_status(
+    recommendation_id: str,
+    payload: RecommendationStatusRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    allowed = {"pending", "executed", "rejected", "approved", "dismissed"}
+    status = payload.status.strip().lower()
+    if status not in allowed:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(allowed)}")
+
+    # Map UI approve/dismiss labels onto persisted statuses used by GreenOps.
+    if status == "approved":
+        status = "executed"
+    elif status == "dismissed":
+        status = "rejected"
+
+    row = (
+        db.query(models.Recommendation)
+        .filter(
+            models.Recommendation.id == recommendation_id,
+            models.Recommendation.org_id == payload.org_id,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+
+    row.status = status
+    db.commit()
+    return {"id": row.id, "org_id": row.org_id, "status": row.status}
+
+
 @router.get("")
 def list_recommendations(
     org_id: str = Query(..., description="Organization ID"),

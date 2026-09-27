@@ -132,7 +132,7 @@ def test_gpu_optimizer_detects_idle_gpus():
             source="gpu",
             message="GPU gpu-a idle for 6h, utilization near zero",
             severity="WARNING",
-            recorded_at=datetime(2024, 8, 2, 10, 0),
+            recorded_at=datetime(2024, 8, 2, 9, 10),
         )
     )
     session.commit()

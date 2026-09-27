@@ -393,10 +393,14 @@ def list_waste_items(
 @router.get("/items/{item_id}")
 def get_waste_item(
     item_id: str,
+    org_id: str = Query(..., description="Organization ID"),
     db: Session = Depends(get_db),
 ) -> WasteItemResponse:
     """Get detailed information about a specific waste item."""
-    waste_item = db.query(models.WasteItem).filter(models.WasteItem.id == item_id).first()
+    waste_item = db.query(models.WasteItem).filter(
+        models.WasteItem.id == item_id,
+        models.WasteItem.org_id == org_id,
+    ).first()
     
     if not waste_item:
         raise HTTPException(status_code=404, detail="Waste item not found")

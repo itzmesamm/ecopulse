@@ -275,9 +275,12 @@ function transformAnomalies(items) {
 }
 
 function recommendationStatus(backendStatus) {
-  if (backendStatus === "completed") return "executed";
-  if (backendStatus === "failed") return "rejected";
-  if (backendStatus === "in_progress") return "pending";
+  if (backendStatus === "completed" || backendStatus === "executed" || backendStatus === "approved") {
+    return "executed";
+  }
+  if (backendStatus === "failed" || backendStatus === "rejected" || backendStatus === "dismissed") {
+    return "rejected";
+  }
   return "pending";
 }
 
@@ -307,6 +310,54 @@ function transformRecommendations(items, history = []) {
       analyzedAt: item.analyzed_at ? new Date(item.analyzed_at).getTime() : 0,
     };
   });
+}
+
+function transformAiRecommendations(items) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const priority = String(item.priority || "medium").toLowerCase();
+    const confidence = Number(item.confidence_score ?? 0);
+    return {
+      id: item.id,
+      resourceId: item.resource_id || item.title || "resource",
+      resourceType: item.service || item.source_type || "resource",
+      priority: ["high", "medium", "low"].includes(priority) ? priority : "medium",
+      suggestedAction: item.suggested_action || item.action || item.title || "Review optimization",
+      rootCause:
+        item.explanation ||
+        item.rationale ||
+        item.summary ||
+        "AI recommendation grounded in waste and operational signals.",
+      dollarSavings: Number(item.dollar_savings ?? item.estimated_savings_usd ?? 0),
+      carbonSavingsKg: Math.round(Number(item.carbon_savings_kg ?? 0) * 100) / 100,
+      confidence: confidence > 1 ? confidence / 100 : confidence,
+      status: recommendationStatus(item.status),
+      icon: wasteIcon(item.service),
+      tone: wasteTone(item.service),
+      analyzedAt: item.created_at ? new Date(item.created_at).getTime() : 0,
+    };
+  });
+}
+
+function transformAlertRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: row.id,
+    type: row.alert_type || "anomaly",
+    severity: String(row.severity || "warning").toLowerCase(),
+    message: row.message || "Alert",
+    channel: row.channel || "in-app",
+    sentAt: row.sent_at ? new Date(row.sent_at).toLocaleString() : "Recently",
+  }));
+}
+
+function transformGreenOpsReport(report) {
+  return {
+    carbonSavedKg: Number(report.total_carbon_savings_kg || 0),
+    energyUsageKwh: Number(report.estimated_energy_kwh_saved || 0),
+    sustainabilityScore: Math.round(Number(report.sustainability_score || 0)),
+    esgSummary:
+      report.esg_summary ||
+      `${report.executed_recommendations_count || 0} executed recommendations saved ${formatUsd(report.total_dollar_savings_usd || 0)}.`,
+  };
 }
 
 function transformConnectedAccounts(accounts) {
@@ -389,9 +440,23 @@ export const api = {
 
   getAiInsight: () =>
     withFallback(async () => {
-      const summary = await fetchAPI(
-        `${BASE_URL}/waste-analytics/summary?org_id=${requireOrgId()}`
-      );
+      const org_id = requireOrgId();
+      const [summary, recs] = await Promise.all([
+        fetchAPI(`${BASE_URL}/waste-analytics/summary?org_id=${org_id}`),
+        fetchAPI(`${BASE_URL}/recommendations?org_id=${org_id}&limit=3`).catch(() => []),
+      ]);
+      if (Array.isArray(recs) && recs.length > 0) {
+        const top = recs[0];
+        const savings = Number(top.dollar_savings ?? top.estimated_savings_usd ?? 0);
+        return {
+          title: top.title || "AI Recommendation",
+          body:
+            top.summary ||
+            top.explanation ||
+            `Top action: ${top.suggested_action || top.action}. Estimated savings ${formatUsd(savings)}/mo.`,
+          cta: "Review recommendations",
+        };
+      }
       if (!summary.total_waste_items) {
         return {
           title: "Getting started",
@@ -465,6 +530,19 @@ export const api = {
     }
   },
 
+  demoLogin: async () => {
+    try {
+      const response = await fetchAPI(`${BASE_URL}/auth/dev-login`, { method: "POST" });
+      if (response.access_token) localStorage.setItem("auth_token", response.access_token);
+      if (response.user_id) localStorage.setItem("user_id", response.user_id);
+      if (response.org_id) localStorage.setItem("org_id", response.org_id);
+      return { ok: true, ...response };
+    } catch (e) {
+      console.error("Demo login failed:", e);
+      return { ok: false, error: e.message };
+    }
+  },
+
   signup: async (email, password, org_name, full_name) => {
     try {
       const response = await fetchAPI(`${BASE_URL}/auth/signup`, {
@@ -503,11 +581,13 @@ export const api = {
   ingestAndAnalyze: async () => {
     try {
       const org_id = requireOrgId();
-      await fetchAPI(`${BASE_URL}/ingest?org_id=${org_id}`, { method: "POST" });
-      await fetchAPI(`${BASE_URL}/waste-analytics/analyze?org_id=${org_id}`, { method: "POST" });
-      return { ok: true };
+      const pipeline = await fetchAPI(`${BASE_URL}/pipeline/run`, {
+        method: "POST",
+        body: JSON.stringify({ org_id, collect: true }),
+      });
+      return { ok: true, pipeline };
     } catch (e) {
-      console.error("Ingest/analyze failed:", e);
+      console.error("Pipeline run failed:", e);
       return { ok: false, error: e.message };
     }
   },
@@ -518,13 +598,21 @@ export const api = {
     localStorage.removeItem("org_id");
   },
 
-  isAuthenticated: () => !!localStorage.getItem("org_id"),
+  isAuthenticated: () => !!localStorage.getItem("org_id") && !!localStorage.getItem("auth_token"),
 
   setAuthToken: (token) => {
     localStorage.setItem("auth_token", token);
   },
 
   getAuthToken,
+
+  askAssistant: async (question, history = []) => {
+    const org_id = requireOrgId();
+    return fetchAPI(`${BASE_URL}/assistant/chat`, {
+      method: "POST",
+      body: JSON.stringify({ org_id, question, history }),
+    });
+  },
 
   getServiceBreakdown: () =>
     withFallback(async () => {
@@ -536,6 +624,22 @@ export const api = {
 
   getAnomalies: () =>
     withFallback(async () => {
+      try {
+        const findings = await fetchAPI(
+          `${BASE_URL}/anomalies/detect?org_id=${requireOrgId()}`
+        );
+        if (Array.isArray(findings) && findings.length > 0) {
+          return findings.map((item, index) => ({
+            id: `${item.resource_id}-${index}`,
+            score: Number(item.severity_score || item.anomaly_score || 0),
+            resourceId: item.resource_id,
+            message: item.details || `${item.service || "resource"} anomaly`,
+            detectedAt: "Just now",
+          }));
+        }
+      } catch (e) {
+        console.warn("Anomaly detect failed, falling back to waste items:", e.message);
+      }
       const items = await fetchAPI(
         `${BASE_URL}/waste-analytics/items?org_id=${requireOrgId()}&min_severity=0.6&limit=10`
       );
@@ -559,21 +663,27 @@ export const api = {
   getRecommendations: (filters = {}) =>
     withFallback(async () => {
       const org_id = requireOrgId();
-      const priority = filters.priority && filters.priority !== "all" ? `&priority=${filters.priority}` : "";
-      const resourceType = filters.resourceType && filters.resourceType !== "all"
-        ? `&resource_type=${encodeURIComponent(filters.resourceType)}`
-        : "";
-      const backendSort = filters.savingsOrder === "lowest" ? "savings_asc" : "savings";
-      const [items, history] = await Promise.all([
-        fetchAPI(`${BASE_URL}/waste-analytics/items?org_id=${org_id}&min_severity=0.5&limit=10&sort_by=${backendSort}${priority}${resourceType}`),
-        fetchAPI(`${BASE_URL}/waste-analytics/recommendations/history?org_id=${org_id}&limit=50&sort_by=created_at`),
-      ]);
-      return transformRecommendations(items, history);
+      let rows = await fetchAPI(`${BASE_URL}/recommendations?org_id=${org_id}&limit=20`);
+      if (!Array.isArray(rows) || rows.length === 0) {
+        await fetchAPI(`${BASE_URL}/recommendations/generate`, {
+          method: "POST",
+          body: JSON.stringify({ org_id, limit: 5 }),
+        }).catch(() => null);
+        rows = await fetchAPI(`${BASE_URL}/recommendations?org_id=${org_id}&limit=20`);
+      }
+      let mapped = transformAiRecommendations(rows);
+      if (filters.priority && filters.priority !== "all") {
+        mapped = mapped.filter((item) => item.priority === filters.priority);
+      }
+      if (filters.resourceType && filters.resourceType !== "all") {
+        mapped = mapped.filter((item) => item.resourceType === filters.resourceType);
+      }
+      return mapped;
     }, recommendations),
 
   updateRecommendationStatus: async (id, status) => {
     const org_id = requireOrgId();
-    return fetchAPI(`${BASE_URL}/waste-analytics/recommendations/${id}/status`, {
+    return fetchAPI(`${BASE_URL}/recommendations/${id}/status`, {
       method: "POST",
       body: JSON.stringify({ status, org_id }),
     });
@@ -581,8 +691,16 @@ export const api = {
 
   getAlerts: () =>
     withFallback(async () => {
+      const org_id = requireOrgId();
+      await fetchAPI(`${BASE_URL}/alerts/check`, {
+        method: "POST",
+        body: JSON.stringify({ org_id }),
+      }).catch(() => null);
+      const rows = await fetchAPI(`${BASE_URL}/alerts?org_id=${org_id}&limit=50`);
+      const mapped = transformAlertRows(rows);
+      if (mapped.length > 0) return mapped;
       const items = await fetchAPI(
-        `${BASE_URL}/waste-analytics/items?org_id=${requireOrgId()}&min_severity=0.8&limit=20`
+        `${BASE_URL}/waste-analytics/items?org_id=${org_id}&min_severity=0.8&limit=20`
       );
       return transformAnomalies(items).map((item) => ({
         id: item.id,
@@ -596,10 +714,16 @@ export const api = {
 
   getGreenOpsSummary: () =>
     withFallback(async () => {
-      const summary = await fetchAPI(
-        `${BASE_URL}/waste-analytics/summary?org_id=${requireOrgId()}`
-      );
-      return transformGreenOpsSummary(summary);
+      try {
+        const report = await fetchAPI(`${BASE_URL}/greenops/report?org_id=${requireOrgId()}`);
+        return transformGreenOpsReport(report);
+      } catch (e) {
+        console.warn("GreenOps report failed, using waste summary:", e.message);
+        const summary = await fetchAPI(
+          `${BASE_URL}/waste-analytics/summary?org_id=${requireOrgId()}`
+        );
+        return transformGreenOpsSummary(summary);
+      }
     }, greenOpsSummary),
 
   getEsgBreakdown: () =>

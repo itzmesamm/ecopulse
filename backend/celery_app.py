@@ -27,6 +27,12 @@ celery_app.conf.update(
     enable_utc=True,
     # Make failures visible during development.
     task_track_started=True,
+    imports=(
+        "backend.tasks.alerts_tasks",
+        "backend.tasks.remediation_tasks",
+        "backend.tasks.ingestion_tasks",
+        "backend.tasks.pipeline_tasks",
+    ),
 )
 
 # Scheduled automation (roadmap-style)
@@ -40,6 +46,11 @@ celery_app.conf.beat_schedule = {
     "process-remediation-every-5-min": {
         "task": "backend.tasks.remediation_tasks.process_pending_recommendations",
         "schedule": crontab(minute="*/5"),
+        "args": (),
+    },
+    "run-full-pipeline-every-15-min": {
+        "task": "backend.tasks.pipeline_tasks.run_pipeline_for_all_organizations",
+        "schedule": crontab(minute="*/15"),
         "args": (),
     },
 }

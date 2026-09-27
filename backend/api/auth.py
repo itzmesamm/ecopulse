@@ -1,30 +1,28 @@
 """
-Auth endpoints — org signup + login, backed by Supabase Auth.
+Auth endpoints — org signup + login, backed by local Postgres.
 
-  POST /auth/signup  -> creates a Supabase Auth user, a new Organization,
-                         and a UserProfile (role="admin") linking them.
-                         This is how a NEW company/tenant onboards.
-  POST /auth/login   -> verifies credentials via Supabase Auth, returns the
-                         session (access_token) plus the caller's org_id/role.
+  POST /auth/signup  -> creates Organization + UserProfile (admin) with
+                         email/password stored in Postgres; returns access token.
+  POST /auth/login   -> verifies email/password against Postgres and returns
+                         a signed access token plus org_id/role.
 """
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 import datetime
 import json
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
-from backend.db.supabase_client import get_supabase
 from backend.db import models
-from backend.ingestion.persist import ingest_and_persist
-from backend.analysis.waste_analyzer import WasteAnalyzer, persist_waste_items
+from backend.db.local_auth import create_access_token, hash_password, verify_password
+from backend.services.pipeline_service import run_organization_pipeline
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class SignupRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
     org_name: str
     full_name: str | None = None
 
@@ -60,89 +58,103 @@ class AccessChecklistItem(BaseModel):
 @router.post("/signup")
 def signup(payload: SignupRequest, db: Session = Depends(get_db)):
     """Creates a brand-new organization with the caller as its first admin."""
-    supabase = get_supabase()
+    email = payload.email.strip().lower()
+    existing = db.query(models.UserProfile).filter(models.UserProfile.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists")
 
-    try:
-        auth_result = supabase.auth.sign_up({
-            "email": payload.email,
-            "password": payload.password,
-        })
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
-    except Exception as exc:
-        message = str(exc)
-        message_lower = message.lower()
-
-        # Supabase signup/email rate limiting
-        if (
-            "rate limit" in message_lower
-            or "too many requests" in message_lower
-            or "for security purposes" in message_lower
-            or "only request this after" in message_lower
-        ):
-            raise HTTPException(
-                status_code=429,
-                detail=message,
-            ) from exc
-
-        # Other Supabase Auth errors
-        raise HTTPException(
-            status_code=502,
-            detail=f"Supabase signup request failed: {message}",
-        ) from exc
-
-    if not auth_result.user:
-        raise HTTPException(
-            status_code=400,
-            detail="Supabase signup failed",
-        )
-
-    org = models.Organization(name=payload.org_name)
+    org = models.Organization(name=payload.org_name.strip() or "New Organization")
     db.add(org)
     db.flush()
 
     profile = models.UserProfile(
-        id=auth_result.user.id,
         org_id=org.id,
+        email=email,
+        password_hash=hash_password(payload.password),
         full_name=payload.full_name,
         role="admin",
     )
-
     db.add(profile)
     db.commit()
-
-    session = auth_result.session
+    db.refresh(profile)
 
     return {
-        "user_id": auth_result.user.id,
+        "user_id": profile.id,
         "org_id": org.id,
         "role": "admin",
-        "access_token": session.access_token if session else None,
-        "note": "Check your email to confirm the account if Supabase email confirmation is enabled.",
+        "access_token": create_access_token(profile.id),
     }
 
 
 @router.post("/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    """Verifies credentials via Supabase Auth and returns the session + org context."""
-    supabase = get_supabase()
-
-    try:
-        auth_result = supabase.auth.sign_in_with_password(
-            {"email": payload.email, "password": payload.password}
-        )
-    except Exception:
+    """Verifies local Postgres credentials and returns the session + org context."""
+    email = payload.email.strip().lower()
+    profile = db.query(models.UserProfile).filter(models.UserProfile.email == email).first()
+    if not profile or not verify_password(payload.password, profile.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    profile = db.query(models.UserProfile).filter_by(id=auth_result.user.id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="No profile found for this user")
-
     return {
-        "access_token": auth_result.session.access_token,
-        "user_id": auth_result.user.id,
+        "access_token": create_access_token(profile.id),
+        "user_id": profile.id,
         "org_id": profile.org_id,
         "role": profile.role,
     }
+
+
+@router.post("/dev-login")
+def dev_login(db: Session = Depends(get_db)):
+    """
+    Local/demo session for synthetic prototypes without a password signup.
+    Disabled automatically when APP_ENV=production.
+    """
+    import os
+
+    if os.getenv("APP_ENV", "development").lower() == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    token = os.getenv("DEV_AUTH_TOKEN") or "local-only-test-token"
+    user_id = os.getenv("DEV_AUTH_USER_ID") or "local-test-user"
+    org_id = os.getenv("DEV_AUTH_ORG_ID") or "local-test-org"
+
+    org = db.query(models.Organization).filter_by(id=org_id).first()
+    if org is None:
+        org = models.Organization(id=org_id, name="EcoPulse Local Demo")
+        db.add(org)
+        db.flush()
+
+    profile = db.query(models.UserProfile).filter_by(id=user_id).first()
+    if profile is None:
+        db.add(
+            models.UserProfile(
+                id=user_id,
+                org_id=org.id,
+                email="demo@ecopulse.local",
+                full_name="Local Demo Admin",
+                role="admin",
+            )
+        )
+    else:
+        profile.org_id = org.id
+        profile.role = "admin"
+        if not profile.full_name:
+            profile.full_name = "Local Demo Admin"
+        if not profile.email:
+            profile.email = "demo@ecopulse.local"
+    db.commit()
+
+    return {
+        "access_token": token,
+        "user_id": user_id,
+        "org_id": org.id,
+        "role": "admin",
+        "demo": True,
+    }
+
+
 # ============================================================================
 # User Profile & Onboarding Endpoints
 # ============================================================================
@@ -165,17 +177,10 @@ def get_current_user(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    email = ""
-    try:
-        sb_user = get_supabase().auth.admin.get_user_by_id(user_id)
-        email = getattr(getattr(sb_user, "user", None), "email", "") or ""
-    except Exception:
-        email = ""
-
     return CurrentUserResponse(
         user={
             "id": profile.id,
-            "email": email,
+            "email": profile.email or "",
             "fullName": profile.full_name or "",
             "role": profile.role,
         },
@@ -282,19 +287,21 @@ def connect_cloud_provider(
     db.commit()
 
     has_billing = db.query(models.BillingRecord).filter_by(org_id=org_id).first()
-    ingest_result = {"skipped": True} if has_billing else ingest_and_persist(db, org_id)
-
-    analyzer = WasteAnalyzer()
-    waste_results = analyzer.analyze_records(db, org_id)
-    items_persisted = persist_waste_items(db, org_id, waste_results)
+    try:
+        pipeline_result = run_organization_pipeline(
+            db, org_id, collect=has_billing is None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {
         "ok": True,
         "provider": provider,
         "status": "connected",
         "message": f"Successfully connected {provider} to organization {org_id}",
-        "ingested": ingest_result,
-        "waste_items_identified": items_persisted,
+        "pipeline": pipeline_result,
+        "waste_items_identified": pipeline_result.get("waste_findings", 0),
+        "recommendations_generated": pipeline_result.get("recommendations", 0),
     }
 
 

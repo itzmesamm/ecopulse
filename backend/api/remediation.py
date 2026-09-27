@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -16,20 +16,19 @@ router = APIRouter(prefix="/remediation", tags=["remediation"])
 class RemediationProcessRequest(BaseModel):
     org_id: str
     recommendation_ids: Optional[List[str]] = Field(default=None, description="If omitted, processes up to 50 pending recommendations")
-    user_role: Optional[str] = Field(default=None, description="Role used for approval logic (admin/approver/viewer)")
     dry_run: bool = True
 
 
 class RemediationApproveRequest(BaseModel):
     org_id: str
     recommendation_ids: List[str]
-    user_role: Optional[str] = Field(default=None, description="Role used for approval logic (admin/approver/viewer)")
     dry_run: bool = True
 
 
 @router.post("/process")
 def process(
     payload: RemediationProcessRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     # Ensure org exists
@@ -57,7 +56,7 @@ def process(
         db=db,
         org_id=payload.org_id,
         recommendation_ids=ids,
-        user_role=payload.user_role,
+        user_role=request.state.profile["role"],
         dry_run=payload.dry_run,
     )
     return {"processed": len(outcomes), "outcomes": outcomes}
@@ -66,6 +65,7 @@ def process(
 @router.post("/approve")
 def approve(
     payload: RemediationApproveRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     org = db.query(models.Organization).filter(models.Organization.id == payload.org_id).first()
@@ -76,7 +76,7 @@ def approve(
         db=db,
         org_id=payload.org_id,
         recommendation_ids=payload.recommendation_ids,
-        user_role=payload.user_role,
+        user_role=request.state.profile["role"],
         dry_run=payload.dry_run,
     )
     return {"processed": len(outcomes), "outcomes": outcomes}

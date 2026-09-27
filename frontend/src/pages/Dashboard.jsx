@@ -28,6 +28,10 @@ export default function Dashboard() {
   const [range, setRange] = useState("30 days");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantQuestion, setAssistantQuestion] = useState("");
+  const [assistantAnswer, setAssistantAnswer] = useState("");
+  const [assistantBusy, setAssistantBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +68,22 @@ export default function Dashboard() {
       cancelled = true;
     };
   }, [range]);
+
+  async function askAssistant(event) {
+    event.preventDefault();
+    const question = assistantQuestion.trim();
+    if (!question || assistantBusy) return;
+    setAssistantBusy(true);
+    setAssistantAnswer("");
+    try {
+      const response = await api.askAssistant(question);
+      setAssistantAnswer(response.answer || response.message || JSON.stringify(response));
+    } catch (err) {
+      setAssistantAnswer(err.message || "Assistant unavailable");
+    } finally {
+      setAssistantBusy(false);
+    }
+  }
 
   return (
     <AppShell>
@@ -142,7 +162,35 @@ export default function Dashboard() {
         {waste.length > 0 && <WasteByCategory categories={waste} />}
       </div>
 
-      <AssistantFab onClick={() => {}} />
+      {assistantOpen && (
+        <div className="card panel" style={{ position: "fixed", right: 24, bottom: 96, width: 360, zIndex: 40 }}>
+          <div className="panel-head">
+            <h3>Ask Veya</h3>
+            <button type="button" className="btn btn-ghost" onClick={() => setAssistantOpen(false)}>
+              Close
+            </button>
+          </div>
+          <form onSubmit={askAssistant}>
+            <textarea
+              value={assistantQuestion}
+              onChange={(e) => setAssistantQuestion(e.target.value)}
+              placeholder="Ask about waste, forecasts, GPU idle time…"
+              rows={3}
+              style={{ width: "100%", marginBottom: 8 }}
+            />
+            <button type="submit" className="btn btn-primary" disabled={assistantBusy}>
+              {assistantBusy ? "Thinking…" : "Ask"}
+            </button>
+          </form>
+          {assistantAnswer && (
+            <p style={{ marginTop: 12, color: "var(--text-2)", whiteSpace: "pre-wrap", fontSize: 13.5 }}>
+              {assistantAnswer}
+            </p>
+          )}
+        </div>
+      )}
+
+      <AssistantFab onClick={() => setAssistantOpen((open) => !open)} />
     </AppShell>
   );
 }

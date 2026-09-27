@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 
 from backend.db import models
 from backend.db.database import get_db
-from backend.genai.embeddings import embed_and_store_logs, retrieve_relevant_logs
+from backend.genai.embeddings import (
+    embed_and_store_logs,
+    retrieve_relevant_logs,
+    retrieve_relevant_logs_lexical,
+)
 from backend.forecasting.forecaster import forecast_costs_safe
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -79,13 +83,14 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
 
     route = _classify(payload.question)
 
-    # Ensure logs are embedded (best effort).
+    # Ensure logs are embedded (best effort) only when embeddings are enabled.
+    embeddings_enabled = os.getenv("EMBEDDINGS_ENABLED", "true").lower() == "true"
     log_embedding_count = (
         db.query(models.LogEmbedding)
         .filter(models.LogEmbedding.org_id == payload.org_id)
         .count()
     )
-    if log_embedding_count == 0:
+    if embeddings_enabled and log_embedding_count == 0:
         try:
             embed_and_store_logs(db, payload.org_id)
         except Exception:
@@ -93,12 +98,20 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
             pass
 
     try:
-        relevant_logs = retrieve_relevant_logs(
-            db,
-            payload.org_id,
-            query=payload.question,
-            top_k=payload.top_k_logs,
-        )
+        if embeddings_enabled:
+            relevant_logs = retrieve_relevant_logs(
+                db,
+                payload.org_id,
+                query=payload.question,
+                top_k=payload.top_k_logs,
+            )
+        else:
+            relevant_logs = retrieve_relevant_logs_lexical(
+                db,
+                payload.org_id,
+                query=payload.question,
+                top_k=payload.top_k_logs,
+            )
     except Exception:
         relevant_logs = []
 
@@ -236,11 +249,60 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     )
 
     model_name = os.getenv("OLLAMA_MODEL", "llama3.1")
+    provider = "ollama"
     try:
         answer = _call_ollama(prompt, model_name=model_name)
     except RuntimeError as exc:
-        # Return a safe fallback answer.
-        answer = f"Could not call Ollama: {exc}"
+        provider = "deterministic_fallback"
+        answer = _fallback_answer(route, context, payload.question, error=str(exc))
 
-    return {"route": route, "answer": answer}
+    return {"route": route, "answer": answer, "provider": provider}
+
+
+def _fallback_answer(route: str, context: dict[str, Any], question: str, *, error: str) -> str:
+    """Deterministic assistant reply when Ollama is unavailable."""
+    lines = [f"Assistant is running in offline mode ({error}).", f"Route: {route}.", ""]
+    if route == "waste":
+        items = context.get("waste_items") or []
+        if not items:
+            lines.append("No waste findings are available yet. Run the synthetic pipeline first.")
+        else:
+            lines.append(f"Top {len(items)} waste findings:")
+            for item in items[:5]:
+                lines.append(
+                    f"- {item.get('resource_id')} ({item.get('service')}): "
+                    f"${float(item.get('estimated_monthly_waste_usd') or 0):.2f}/mo, "
+                    f"severity {float(item.get('severity_score') or 0):.2f}"
+                )
+    elif route == "forecasts":
+        if context.get("forecast_error"):
+            lines.append(f"Forecast unavailable: {context['forecast_error']}")
+        else:
+            lines.append(
+                f"Next {context.get('forecast_period_days')} days forecast about "
+                f"${float(context.get('total_forecasted_cost_usd') or 0):.2f}."
+            )
+    elif route == "anomalies":
+        rows = context.get("anomalies") or []
+        lines.append(f"Tracked anomalies: {len(rows)}")
+        for row in rows[:5]:
+            lines.append(f"- {row.get('resource_id')}: severity {float(row.get('severity_score') or 0):.2f}")
+    elif route == "gpu":
+        rows = context.get("gpu_optimizations") or []
+        lines.append(f"GPU optimization signals: {len(rows)}")
+        for row in rows[:5]:
+            lines.append(
+                f"- {row.get('gpu_id')}: util {float(row.get('utilization_pct') or 0):.1f}%, "
+                f"waste ${float(row.get('estimated_monthly_waste_usd') or 0):.2f}/mo"
+            )
+    elif route == "greenops":
+        totals = context.get("totals") or {}
+        lines.append(
+            f"Executed savings ${float(totals.get('total_dollar_savings_usd') or 0):.2f}, "
+            f"carbon {float(totals.get('total_carbon_savings_kg') or 0):.2f} kg."
+        )
+    else:
+        lines.append(f"Received question: {question}")
+        lines.append("Connect Ollama for grounded LLM answers; structured context is still available.")
+    return "\n".join(lines)
 

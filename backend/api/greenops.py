@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from backend.db import models
@@ -17,9 +18,12 @@ class GreenOpsReport(BaseModel):
     executed_recommendations_count: int
     total_dollar_savings_usd: float
     total_carbon_savings_kg: float
-    estimated_energy_kwh_saved: float
+    estimated_energy_kwh_saved: Optional[float]
     sustainability_score: float
     esg_summary: str
+    savings_basis: str
+    carbon_methodology: str
+    carbon_estimate_coverage_pct: float
 
     top_recommendations: list[dict[str, Any]]
 
@@ -30,13 +34,21 @@ def get_report(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ) -> GreenOpsReport:
-    executed = (
+    executed_query = (
         db.query(models.Recommendation)
         .filter(models.Recommendation.org_id == org_id, models.Recommendation.status == "executed")
-        .order_by(models.Recommendation.created_at.desc())
-        .limit(limit)
-        .all()
     )
+    executed = executed_query.order_by(models.Recommendation.created_at.desc()).limit(limit).all()
+    totals = executed_query.with_entities(
+        func.count(models.Recommendation.id),
+        func.coalesce(func.sum(models.Recommendation.dollar_savings), 0.0),
+        func.coalesce(func.sum(models.Recommendation.carbon_savings_kg), 0.0),
+        func.sum(case((models.Recommendation.carbon_savings_kg.is_not(None), 1), else_=0)),
+    ).one()
+    executed_count = int(totals[0] or 0)
+    total_dollar = float(totals[1] or 0.0)
+    total_carbon = float(totals[2] or 0.0)
+    carbon_estimate_count = int(totals[3] or 0)
 
     top = [
         {
@@ -52,14 +64,9 @@ def get_report(
         for r in executed
     ]
 
-    total_dollar = sum(float(r.dollar_savings or 0.0) for r in executed)
-    total_carbon = sum(float(r.carbon_savings_kg or 0.0) for r in executed)
-
-    # Derived / heuristic report extras (kept minimal since carbon is already estimated).
-    default_intensity = 0.4  # kg CO2 / kWh fallback
-    estimated_energy_kwh_saved = 0.0
-    if total_carbon > 0:
-        estimated_energy_kwh_saved = total_carbon / default_intensity
+    # The current regional-factor estimator does not persist energy per action;
+    # avoid dividing by an invented average factor and present no fake precision.
+    estimated_energy_kwh_saved = None
 
     # Simple sustainability score: scaled and clamped into [0,100]
     sustainability_score = min(100.0, (total_carbon / 1000.0) * 25.0) if total_carbon > 0 else 0.0
@@ -75,12 +82,15 @@ def get_report(
 
     return GreenOpsReport(
         org_id=org_id,
-        executed_recommendations_count=len(executed),
+        executed_recommendations_count=executed_count,
         total_dollar_savings_usd=round(total_dollar, 2),
         total_carbon_savings_kg=round(total_carbon, 4),
-        estimated_energy_kwh_saved=round(estimated_energy_kwh_saved, 2),
+        estimated_energy_kwh_saved=estimated_energy_kwh_saved,
         sustainability_score=round(float(sustainability_score), 2),
         esg_summary=esg_summary,
+        savings_basis="model-estimated opportunity amounts for recommendations marked executed; not verified post-action savings",
+        carbon_methodology="regional grid-intensity estimate using configured static factors; CCF-inspired, not a direct Cloud Carbon Footprint calculation",
+        carbon_estimate_coverage_pct=round((carbon_estimate_count / executed_count) * 100, 2) if executed_count else 0.0,
         top_recommendations=top,
     )
 

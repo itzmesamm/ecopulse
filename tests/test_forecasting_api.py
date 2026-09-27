@@ -13,15 +13,17 @@ from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch, MagicMock
 from datetime import date, timedelta
 from sqlalchemy.orm import Session
+from types import SimpleNamespace
 
 from backend.main import app
+from backend.api import security
 from backend.db import models
 from backend.db.database import get_db
 from backend.forecasting.aggregator import DailyCostAggregate
 from backend.forecasting.forecaster import ForecastError
 
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-token"})
 
 
 # ============================================================================
@@ -35,8 +37,21 @@ def mock_db():
 
 
 @pytest.fixture
-def override_db(mock_db):
+def override_db(mock_db, monkeypatch):
     """Override get_db dependency with mock."""
+    auth_db = Mock()
+    auth_db.query.return_value.filter_by.return_value.first.return_value = SimpleNamespace(
+        id="test-user", org_id="test-org", role="admin"
+    )
+    monkeypatch.setattr(security, "SessionLocal", lambda: auth_db)
+    monkeypatch.setattr(
+        security,
+        "get_supabase",
+        lambda: SimpleNamespace(auth=SimpleNamespace(
+            get_user=lambda token: SimpleNamespace(user=SimpleNamespace(id="test-user"))
+        )),
+    )
+
     def override_get_db():
         return mock_db
     
@@ -86,15 +101,15 @@ def create_mock_aggregates_for_api(
 
 class TestGetForecastEndpoint:
     def test_forecast_endpoint_requires_org_id(self, override_db):
-        """Endpoint requires org_id parameter."""
+        """Authenticated requests must include an organization id."""
         response = client.get("/forecasting/forecast")
-        assert response.status_code == 422  # Validation error (missing required param)
+        assert response.status_code == 400
     
     def test_forecast_endpoint_org_not_found(self, override_db):
         """Endpoint returns 404 if organization doesn't exist."""
         override_db.query().filter_by().first.return_value = None
         
-        response = client.get("/forecasting/forecast", params={"org_id": "nonexistent-org"})
+        response = client.get("/forecasting/forecast", params={"org_id": "test-org"})
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
     
@@ -290,15 +305,15 @@ class TestGetForecastEndpoint:
 
 class TestGetForecastSummaryEndpoint:
     def test_forecast_summary_requires_org_id(self, override_db):
-        """Endpoint requires org_id parameter."""
+        """Authenticated requests must include an organization id."""
         response = client.get("/forecasting/forecast-summary")
-        assert response.status_code == 422
+        assert response.status_code == 400
     
     def test_forecast_summary_org_not_found(self, override_db):
         """Endpoint returns 404 if organization doesn't exist."""
         override_db.query().filter_by().first.return_value = None
         
-        response = client.get("/forecasting/forecast-summary", params={"org_id": "nonexistent"})
+        response = client.get("/forecasting/forecast-summary", params={"org_id": "test-org"})
         assert response.status_code == 404
     
     def test_forecast_summary_insufficient_data(self, override_db):
