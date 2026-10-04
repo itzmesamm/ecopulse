@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.db import models
@@ -43,6 +43,11 @@ class RecommendationRequest(BaseModel):
     service: Optional[str] = None
     environment: Optional[str] = None
     limit: int = 5
+    question: Optional[str] = Field(default=None, max_length=500)
+
+
+class RecommendationDismissRequest(BaseModel):
+    org_id: str
 
 
 class LogIndexResponse(BaseModel):
@@ -65,6 +70,7 @@ def generate_recommendations(
         service=payload.service,
         environment=payload.environment,
         limit=payload.limit,
+        user_question=payload.question,
     )
 
     if not recommendations:
@@ -111,6 +117,31 @@ def generate_recommendations(
             for item in saved
         ],
     }
+
+
+@router.post("/{recommendation_id}/dismiss", response_model=RecommendationResponse)
+def dismiss_recommendation(
+    recommendation_id: str,
+    payload: RecommendationDismissRequest,
+    db: Session = Depends(get_db),
+) -> RecommendationResponse:
+    recommendation = (
+        db.query(models.Recommendation)
+        .filter(
+            models.Recommendation.id == recommendation_id,
+            models.Recommendation.org_id == payload.org_id,
+        )
+        .first()
+    )
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    if recommendation.status not in {"pending", "pending_approval"}:
+        raise HTTPException(status_code=409, detail="Only pending recommendations can be dismissed")
+
+    recommendation.status = "rejected"
+    db.commit()
+    db.refresh(recommendation)
+    return RecommendationResponse.model_validate(recommendation)
 
 
 @router.post("/index-logs", response_model=LogIndexResponse)

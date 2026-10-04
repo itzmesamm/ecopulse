@@ -9,6 +9,7 @@ import InsightCard from "../components/dashboard/InsightCard";
 import OptimizationProgress from "../components/dashboard/OptimizationProgress";
 import WasteByCategory from "../components/dashboard/WasteByCategory";
 import AssistantFab from "../components/dashboard/AssistantFab";
+import AssistantPanel from "../components/dashboard/AssistantPanel";
 import { Icon } from "../components/ui/Icon";
 import { api } from "../services/api";
 import { useUser } from "../context/UserContext";
@@ -28,6 +29,7 @@ export default function Dashboard() {
   const [range, setRange] = useState("30 days");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +144,8 @@ export default function Dashboard() {
         {waste.length > 0 && <WasteByCategory categories={waste} />}
       </div>
 
-      <AssistantFab onClick={() => {}} />
+      <AssistantFab onClick={() => setAssistantOpen(true)} />
+      <AssistantPanel open={assistantOpen} onClose={() => setAssistantOpen(false)} />
     </AppShell>
   );
 }

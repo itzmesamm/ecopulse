@@ -1,18 +1,20 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "./context/ThemeContext";
 import { UserProvider } from "./context/UserContext";
-import Landing from "./pages/Landing";
-import Login from "./pages/Login";
-import Signup from "./pages/Signup";
-import ConnectCloud from "./pages/ConnectCloud";
-import Dashboard from "./pages/Dashboard";
 import { api } from "./services/api";
-import Analytics from "./pages/Analytics";
-import Insights from "./pages/Insights";
-import Alerts from "./pages/Alerts";
-import GreenOps from "./pages/GreenOps";
-import Settings from "./pages/Settings";
-import Profile from "./pages/Profile";
+
+const Landing = lazy(() => import("./pages/Landing"));
+const Login = lazy(() => import("./pages/Login"));
+const Signup = lazy(() => import("./pages/Signup"));
+const ConnectCloud = lazy(() => import("./pages/ConnectCloud"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const Insights = lazy(() => import("./pages/Insights"));
+const Alerts = lazy(() => import("./pages/Alerts"));
+const GreenOps = lazy(() => import("./pages/GreenOps"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Profile = lazy(() => import("./pages/Profile"));
 
 function RequireAuth({ children }) {
   if (!api.isAuthenticated()) {
@@ -26,6 +28,7 @@ export default function App() {
     <ThemeProvider>
       <BrowserRouter>
         <UserProvider>
+        <Suspense fallback={<div className="route-loading" role="status">Loading page…</div>}>
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
@@ -103,6 +106,7 @@ export default function App() {
             }
           />
         </Routes>
+        </Suspense>
         </UserProvider>
       </BrowserRouter>
     </ThemeProvider>

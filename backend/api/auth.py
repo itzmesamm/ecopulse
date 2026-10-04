@@ -10,14 +10,15 @@ Auth endpoints — org signup + login, backed by Supabase Auth.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 import datetime
 import json
+import re
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from backend.db.database import get_db
 from backend.db.supabase_client import get_supabase
 from backend.db import models
-from backend.ingestion.persist import ingest_and_persist
-from backend.analysis.waste_analyzer import WasteAnalyzer, persist_waste_items
+from backend.api.security import ensure_org_access, get_remediation_actor
+from backend.remediation.cloud_credentials import encrypt_cloud_credentials
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -249,15 +250,51 @@ def connect_cloud_provider(
     org_id: str = Query(..., description="Organization ID"),
     payload: ConnectCloudRequest | None = Body(default=None),
     db: Session = Depends(get_db),
+    actor: models.UserProfile = Depends(get_remediation_actor),
 ) -> dict:
-    """
-    Store cloud provider credentials, ingest synthetic data, and run waste analysis.
-    """
+    """Verify and store AWS execution credentials using authenticated org scope."""
+    ensure_org_access(actor, org_id)
+    if actor.role != "admin":
+        raise HTTPException(status_code=403, detail="Only an organization admin can connect cloud credentials")
+    provider = provider.lower()
+    if provider != "aws":
+        raise HTTPException(status_code=501, detail="Live connection verification currently supports AWS only")
     org = db.query(models.Organization).filter_by(id=org_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
-    credentials = payload.credentials if payload else None
+    credentials = payload.credentials if payload else {}
+    access_key_id = credentials.get("access_key_id")
+    secret_access_key = credentials.get("secret_access_key")
+    region = credentials.get("region")
+    if not isinstance(access_key_id, str) or not re.fullmatch(r"(?:AKIA|ASIA)[0-9A-Z]{16}", access_key_id):
+        raise HTTPException(status_code=422, detail="A valid AWS access key ID is required")
+    if not isinstance(secret_access_key, str) or len(secret_access_key) < 32:
+        raise HTTPException(status_code=422, detail="A valid AWS secret access key is required")
+    if not isinstance(region, str) or not re.fullmatch(r"[a-z]{2}(?:-gov)?-[a-z]+-\d", region):
+        raise HTTPException(status_code=422, detail="A valid AWS region is required")
+
+    try:
+        import boto3
+
+        aws_session = boto3.Session(
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            aws_session_token=credentials.get("session_token"),
+            region_name=region,
+        )
+        identity = aws_session.client("sts").get_caller_identity()
+        encrypted_credentials = encrypt_cloud_credentials({
+            "access_key_id": access_key_id,
+            "secret_access_key": secret_access_key,
+            "session_token": credentials.get("session_token"),
+            "region": region,
+            "account_id": identity["Account"],
+        })
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="AWS credentials could not be verified for the selected region") from exc
 
     existing = db.query(models.CloudProvider).filter_by(
         org_id=org_id,
@@ -268,12 +305,12 @@ def connect_cloud_provider(
     if existing:
         existing.is_connected = True
         existing.last_sync = now
-        existing.credentials_encrypted = json.dumps(credentials) if credentials else None
+        existing.credentials_encrypted = encrypted_credentials
     else:
         cp = models.CloudProvider(
             org_id=org_id,
             provider_type=provider,
-            credentials_encrypted=json.dumps(credentials) if credentials else None,
+            credentials_encrypted=encrypted_credentials,
             is_connected=True,
             last_sync=now,
         )
@@ -281,20 +318,13 @@ def connect_cloud_provider(
 
     db.commit()
 
-    has_billing = db.query(models.BillingRecord).filter_by(org_id=org_id).first()
-    ingest_result = {"skipped": True} if has_billing else ingest_and_persist(db, org_id)
-
-    analyzer = WasteAnalyzer()
-    waste_results = analyzer.analyze_records(db, org_id)
-    items_persisted = persist_waste_items(db, org_id, waste_results)
-
     return {
         "ok": True,
         "provider": provider,
         "status": "connected",
-        "message": f"Successfully connected {provider} to organization {org_id}",
-        "ingested": ingest_result,
-        "waste_items_identified": items_persisted,
+        "account_id": identity["Account"],
+        "region": region,
+        "message": "AWS identity verified and credentials encrypted. Billing ingestion is not configured by this connection flow.",
     }
 
 
@@ -313,15 +343,17 @@ def get_iam_policy(provider: str = Query("aws", description="Cloud provider (aws
                         "ce:GetCostAndUsage",
                         "ce:DescribeCostCategoryDefinition",
                         "ec2:DescribeInstances",
-                        "ec2:DescribeVolumes",
-                        "ec2:DescribeNetworkInterfaces",
-                        "rds:DescribeDBInstances",
-                        "s3:ListAllMyBuckets",
-                        "s3:GetBucketLocation",
-                        "lambda:ListFunctions",
                     ],
                     "Resource": "*"
-                }
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["ec2:StopInstances"],
+                    "Resource": "arn:aws:ec2:*:*:instance/*",
+                    "Condition": {
+                        "StringEquals": {"ec2:ResourceTag/EcoPulseAutomation": "enabled"}
+                    }
+                },
             ]
         },
         "gcp": {

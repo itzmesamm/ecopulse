@@ -4,11 +4,11 @@ export default function GrantAccess({ policy, checklist }) {
   return (
     <div className="grant-grid">
       <div className="card grant-box">
-        <h4>1. Attach this read-only policy</h4>
+        <h4>1. Attach this least-privilege policy</h4>
         <div className="code-block">{policy}</div>
         <div className="callout">
           <Icon name="shield" style={{ display: "inline", width: 14, height: 14, marginRight: 6 }} />
-          Read-only scope — Veya can never modify resources with this policy alone.
+          Stop permission is limited to instances tagged EcoPulseAutomation=enabled. Live stops still require admin approval.
         </div>
       </div>
 

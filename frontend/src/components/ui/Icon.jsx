@@ -30,6 +30,9 @@ import {
   User,
   Building2,
   CircleCheck,
+  X,
+  Send,
+  LoaderCircle,
 } from "lucide-react";
 
 // Semantic key -> component. Add new icons here so the rest of the
@@ -67,6 +70,9 @@ export const ICONS = {
   user: User,
   building: Building2,
   circleCheck: CircleCheck,
+  close: X,
+  send: Send,
+  loading: LoaderCircle,
 };
 
 export function Icon({ name, ...props }) {

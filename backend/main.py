@@ -30,10 +30,6 @@ from backend.api.assistant import router as assistant_router
 from backend.api.greenops import router as greenops_router
 from backend.ingestion.persist import ingest_and_persist
 
-if engine.dialect.name == "postgresql":
-  with engine.begin() as connection:
-    connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-
 Base.metadata.create_all(bind=engine)
 
 if engine.dialect.name == "postgresql":

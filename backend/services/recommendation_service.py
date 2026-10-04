@@ -21,6 +21,17 @@ def _build_recommendation_context(
     # Build a mixed context list (waste + GPU optimizations) so the GenAI
     # can produce recommendations from multiple FinOps/GreenOps signals.
     query = db.query(models.WasteItem).filter(models.WasteItem.org_id == org_id)
+    existing_finding_ids = [
+        row[0]
+        for row in db.query(models.Recommendation.waste_finding_id)
+        .filter(
+            models.Recommendation.org_id == org_id,
+            models.Recommendation.waste_finding_id.isnot(None),
+        )
+        .all()
+    ]
+    if existing_finding_ids:
+        query = query.filter(models.WasteItem.id.notin_(existing_finding_ids))
     if service:
         query = query.filter(models.WasteItem.service == service)
     if environment:
@@ -131,15 +142,20 @@ def _generate_ai_recommendations(
     db: Session,
     org_id: str,
     context: List[Dict[str, Any]],
+    user_question: Optional[str] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     if not context:
         return []
 
     recommendations = []
     for waste_finding in context:
-        result = generate_recommendation(db, org_id, waste_finding)
+        if user_question:
+            result = generate_recommendation(db, org_id, waste_finding, user_question=user_question)
+        else:
+            result = generate_recommendation(db, org_id, waste_finding)
         if result is None:
-            return None
+            recommendations.extend(_fallback_recommendations([waste_finding], org_id))
+            continue
         source_type = waste_finding.get("source_type") or "waste"
         recommendations.append(
             {
@@ -168,12 +184,13 @@ def generate_recommendations_for_org(
     service: Optional[str] = None,
     environment: Optional[str] = None,
     limit: int = 5,
+    user_question: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     context = _build_recommendation_context(db, org_id, service=service, environment=environment, limit=limit)
     if not context:
         return []
 
-    ai_recommendations = _generate_ai_recommendations(db, org_id, context)
+    ai_recommendations = _generate_ai_recommendations(db, org_id, context, user_question=user_question)
     if ai_recommendations:
         for item in ai_recommendations:
             item.setdefault("org_id", org_id)
