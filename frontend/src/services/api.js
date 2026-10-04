@@ -17,7 +17,6 @@
    serviceBreakdown,
    anomalies,
    forecastAccuracy,
-   recommendations,
    alerts,
    greenOpsSummary,
    esgBreakdown,
@@ -274,39 +273,41 @@ function transformAnomalies(items) {
   }));
 }
 
-function recommendationStatus(backendStatus) {
-  if (backendStatus === "completed") return "executed";
-  if (backendStatus === "failed") return "rejected";
-  if (backendStatus === "in_progress") return "pending";
-  return "pending";
+function transformGeneratedRecommendation(item) {
+  let modelOutput = {};
+  const explanationText = item.explanation || item.summary || item.rationale || "";
+  if (typeof explanationText === "string") {
+    try {
+      const parsed = JSON.parse(explanationText);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) modelOutput = parsed;
+    } catch {
+      // Plain-text explanations are already display-ready.
+    }
+  }
+
+  const resourceId = item.resource_id || item.service || "Cloud resource";
+  const nestedAction = modelOutput.suggested_action;
+  const topLevelAction = item.suggested_action || item.action;
+  return {
+    id: item.id,
+    resourceId,
+    resourceType: item.service || item.source_type || "resource",
+    priority: item.priority || "medium",
+    suggestedAction: nestedAction || (topLevelAction !== "manual_review" && topLevelAction) || "Review this resource",
+    rootCause: modelOutput.explanation || explanationText || "No explanation was provided.",
+    dollarSavings: Number(modelOutput.dollar_savings ?? item.dollar_savings ?? item.estimated_savings_usd ?? 0),
+    carbonSavingsKg: Number(item.carbon_savings_kg || 0),
+    confidence: Number(modelOutput.confidence ?? item.confidence_score ?? 0),
+    status: item.status || "pending",
+    environment: item.environment || "unknown",
+    icon: wasteIcon(item.service || item.source_type),
+    tone: wasteTone(item.service || item.source_type),
+  };
 }
 
-function transformRecommendations(items, history = []) {
-  const statusByItem = {};
-  (Array.isArray(history) ? history : []).forEach((action) => {
-    if (action.waste_item_id) {
-      statusByItem[action.waste_item_id] = recommendationStatus(action.status);
-    }
-  });
-
-  return (Array.isArray(items) ? items : []).map((item) => {
-    const severity = Number(item.severity_score || 0);
-    return {
-      id: item.id,
-      resourceId: item.resource_id,
-      resourceType: item.service || "resource",
-      priority: severity >= 0.8 ? "high" : severity >= 0.6 ? "medium" : "low",
-      suggestedAction: `Optimize ${item.service || "resource"}`,
-      rootCause: item.details || item.waste_type?.replace(/_/g, " ") || "Potential cloud waste detected.",
-      dollarSavings: Number(item.estimated_monthly_waste_usd || 0),
-      carbonSavingsKg: Math.round(Number(item.estimated_monthly_waste_usd || 0) * 0.05 * 100) / 100,
-      confidence: severity,
-      status: statusByItem[item.id] || "pending",
-      icon: wasteIcon(item.service),
-      tone: wasteTone(item.service),
-      analyzedAt: item.analyzed_at ? new Date(item.analyzed_at).getTime() : 0,
-    };
-  });
+function remediationRole(role) {
+  const normalized = String(role || "").toLowerCase();
+  return normalized === "admin" || normalized === "approver" ? normalized : "viewer";
 }
 
 function transformConnectedAccounts(accounts) {
@@ -495,7 +496,6 @@ export const api = {
       );
       return { ok: true, ...response };
     } catch (e) {
-      console.error("Cloud connection failed:", e);
       return { ok: false, error: e.message };
     }
   },
@@ -556,20 +556,75 @@ export const api = {
       };
     }, forecastAccuracy),
 
-  getRecommendations: (filters = {}) =>
-    withFallback(async () => {
+  getRecommendations: async (filters = {}) => {
       const org_id = requireOrgId();
-      const priority = filters.priority && filters.priority !== "all" ? `&priority=${filters.priority}` : "";
-      const resourceType = filters.resourceType && filters.resourceType !== "all"
-        ? `&resource_type=${encodeURIComponent(filters.resourceType)}`
-        : "";
-      const backendSort = filters.savingsOrder === "lowest" ? "savings_asc" : "savings";
-      const [items, history] = await Promise.all([
-        fetchAPI(`${BASE_URL}/waste-analytics/items?org_id=${org_id}&min_severity=0.5&limit=10&sort_by=${backendSort}${priority}${resourceType}`),
-        fetchAPI(`${BASE_URL}/waste-analytics/recommendations/history?org_id=${org_id}&limit=50&sort_by=created_at`),
-      ]);
-      return transformRecommendations(items, history);
-    }, recommendations),
+      const query = new URLSearchParams({ org_id, limit: "50" });
+      if (filters.service) query.set("service", filters.service);
+      if (filters.environment) query.set("environment", filters.environment);
+      const items = await fetchAPI(`${BASE_URL}/recommendations?${query}`);
+      return items.map(transformGeneratedRecommendation);
+  },
+
+  generateRecommendations: async (limit = 5, question) => {
+    const response = await fetchAPI(`${BASE_URL}/recommendations/generate`, {
+      method: "POST",
+      body: JSON.stringify({ org_id: requireOrgId(), limit, ...(question && { question }) }),
+    });
+    return (response.recommendations || []).map(transformGeneratedRecommendation);
+  },
+
+  prepareAutomationPlan: (recommendationIds, userRole) =>
+    fetchAPI(`${BASE_URL}/remediation/plan`, {
+      method: "POST",
+      body: JSON.stringify({
+        org_id: requireOrgId(),
+        recommendation_ids: recommendationIds,
+        user_role: remediationRole(userRole),
+      }),
+    }),
+
+  getAutomationPlans: async () => {
+    const query = new URLSearchParams({ org_id: requireOrgId(), limit: "100" });
+    const response = await fetchAPI(`${BASE_URL}/remediation/history?${query}`);
+    return response.plans || [];
+  },
+
+  dismissRecommendation: async (id) => {
+    const org_id = requireOrgId();
+    return fetchAPI(`${BASE_URL}/recommendations/${id}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ org_id }),
+    });
+  },
+
+  processRemediation: async (recommendationIds, userRole) =>
+    fetchAPI(`${BASE_URL}/remediation/process`, {
+      method: "POST",
+      body: JSON.stringify({
+        org_id: requireOrgId(),
+        recommendation_ids: recommendationIds,
+        user_role: remediationRole(userRole),
+        dry_run: true,
+      }),
+    }),
+
+  approveRemediation: async (recommendationIds, userRole, dryRun = true, confirmations = {}) =>
+    fetchAPI(`${BASE_URL}/remediation/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        org_id: requireOrgId(),
+        recommendation_ids: recommendationIds,
+        user_role: remediationRole(userRole),
+        dry_run: dryRun,
+        confirmations,
+      }),
+    }),
+
+  askAssistant: async (question, history = []) =>
+    fetchAPI(`${BASE_URL}/assistant/chat`, {
+      method: "POST",
+      body: JSON.stringify({ org_id: requireOrgId(), question, history }),
+    }),
 
   updateRecommendationStatus: async (id, status) => {
     const org_id = requireOrgId();

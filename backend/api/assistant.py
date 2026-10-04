@@ -51,6 +51,7 @@ def _call_ollama(prompt: str, *, model_name: str) -> str:
         "model": model_name,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "10m"),
         "options": {"temperature": 0.2, "num_predict": max_tokens},
     }
 
@@ -79,28 +80,29 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
 
     route = _classify(payload.question)
 
-    # Ensure logs are embedded (best effort).
-    log_embedding_count = (
-        db.query(models.LogEmbedding)
-        .filter(models.LogEmbedding.org_id == payload.org_id)
-        .count()
-    )
-    if log_embedding_count == 0:
-        try:
-            embed_and_store_logs(db, payload.org_id)
-        except Exception:
-            # Assistant can still answer from structured DB context.
-            pass
-
-    try:
-        relevant_logs = retrieve_relevant_logs(
-            db,
-            payload.org_id,
-            query=payload.question,
-            top_k=payload.top_k_logs,
+    relevant_logs = []
+    embeddings_enabled = os.getenv("EMBEDDINGS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    if embeddings_enabled:
+        log_embedding_count = (
+            db.query(models.LogEmbedding)
+            .filter(models.LogEmbedding.org_id == payload.org_id)
+            .count()
         )
-    except Exception:
-        relevant_logs = []
+        if log_embedding_count == 0:
+            try:
+                embed_and_store_logs(db, payload.org_id)
+            except Exception:
+                # Assistant can still answer from structured DB context.
+                pass
+        try:
+            relevant_logs = retrieve_relevant_logs(
+                db,
+                payload.org_id,
+                query=payload.question,
+                top_k=payload.top_k_logs,
+            )
+        except Exception:
+            relevant_logs = []
 
     # Structured DB context per route
     if route == "waste":
@@ -108,7 +110,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
             db.query(models.WasteItem)
             .filter(models.WasteItem.org_id == payload.org_id)
             .order_by(models.WasteItem.severity_score.desc())
-            .limit(6)
+            .limit(3)
             .all()
         )
         context = {
@@ -141,7 +143,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
                         "ci_lower": float(f.confidence_lower_bound),
                         "ci_upper": float(f.confidence_upper_bound),
                     }
-                    for f in result.forecasts[:5]
+                    for f in result.forecasts[:3]
                 ],
             }
     elif route == "anomalies":
@@ -149,7 +151,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
             db.query(models.AnomalyFinding)
             .filter(models.AnomalyFinding.org_id == payload.org_id)
             .order_by(models.AnomalyFinding.severity_score.desc())
-            .limit(6)
+            .limit(3)
             .all()
         )
         context = {
@@ -170,7 +172,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
             db.query(models.GPUOptimizationFinding)
             .filter(models.GPUOptimizationFinding.org_id == payload.org_id)
             .order_by(models.GPUOptimizationFinding.severity_score.desc())
-            .limit(6)
+            .limit(3)
             .all()
         )
         context = {
@@ -192,7 +194,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
             db.query(models.Recommendation)
             .filter(models.Recommendation.org_id == payload.org_id, models.Recommendation.status == "executed")
             .order_by(models.Recommendation.created_at.desc())
-            .limit(6)
+            .limit(3)
             .all()
         )
         total_carbon = sum(float(r.carbon_savings_kg or 0.0) for r in executed)
@@ -215,7 +217,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     history_text = ""
     if payload.history:
         # Keep short to avoid prompt bloat.
-        last = payload.history[-3:]
+        last = payload.history[-2:]
         history_text = "\n".join([f"Q: {h.q}\nA: {h.a}" for h in last])
 
     system_prompt = (
@@ -229,8 +231,8 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
         f"{system_prompt}\n\n"
         f"Route: {route}\n"
         f"Conversation history (last turns):\n{history_text or 'None'}\n\n"
-        f"Structured context (JSON):\n{json.dumps(context)[:6000]}\n\n"
-        f"Relevant operational logs:\n{json.dumps(relevant_logs)[:4000]}\n\n"
+        f"Structured context (JSON):\n{json.dumps(context)[:3000]}\n\n"
+        f"Relevant operational logs:\n{json.dumps(relevant_logs)[:1200]}\n\n"
         f"User question: {payload.question}\n\n"
         "Answer:"
     )

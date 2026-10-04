@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 
 BASE_URL = "http://localhost:8000"
+__test__ = False
 
 # Color codes for output
 GREEN = '\033[92m'

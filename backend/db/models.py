@@ -19,7 +19,6 @@ import json
 import uuid
 from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Text
 from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Text
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import relationship
 from backend.db.database import Base
@@ -55,11 +54,6 @@ class Vector384(UserDefinedType):
                 return value
 
         return process
-
-
-@compiles(Vector384, "postgresql")
-def compile_vector384(type_, compiler, **kwargs):
-    return "vector(384)"
 
 
 # ---------------------------------------------------------------------------
