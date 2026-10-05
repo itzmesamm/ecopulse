@@ -29,6 +29,9 @@ export default function Dashboard() {
   const [range, setRange] = useState("30 days");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [demoMessage, setDemoMessage] = useState("");
+  const [loadingDemo, setLoadingDemo] = useState(false);
+  const [reload, setReload] = useState(0);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   useEffect(() => {
@@ -65,15 +68,36 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [range]);
+  }, [range, reload]);
+
+  async function handleLoadDemoData() {
+    setLoadingDemo(true);
+    setError("");
+    setDemoMessage("");
+    try {
+      const result = await api.loadDemoData();
+      setDemoMessage(`Demo dataset ready: ${result.billing} billing, ${result.gpu} GPU, and ${result.k8s} Kubernetes records added.`);
+      setReload((value) => value + 1);
+    } catch (requestError) {
+      setError(requestError.message || "Could not load the demo dataset.");
+    } finally {
+      setLoadingDemo(false);
+    }
+  }
 
   return (
     <AppShell>
       <Topbar title="Overview" />
 
+      <div className="demo-data-banner" role="note">
+        <Icon name="database" />
+        <span>Demo data only. These repeatable sample records are not connected to a live cloud account.</span>
+      </div>
+
       {error && (
         <div style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{error}</div>
       )}
+      {demoMessage && <div className="workflow-message" role="status">{demoMessage}</div>}
 
       <div className="welcome-row">
         <div>
@@ -82,6 +106,16 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="selects">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleLoadDemoData}
+            disabled={loadingDemo}
+            title="Load the repeatable demo dataset and run waste analysis"
+          >
+            <Icon name={loadingDemo ? "loading" : "database"} />
+            {loadingDemo ? "Loading demo…" : "Load demo data"}
+          </button>
           {RANGES.map((r) => (
             <button
               key={r}

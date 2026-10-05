@@ -17,7 +17,7 @@ anomalies, log_embeddings, alerts) will be added when we build those layers.
 import datetime
 import json
 import uuid
-from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Boolean, Column, String, Float, DateTime, ForeignKey, Integer, Text
 from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Text
 from sqlalchemy.types import UserDefinedType
 from sqlalchemy.orm import relationship
@@ -122,6 +122,7 @@ class BillingRecord(Base):
     owner = Column(String, nullable=True)
     cost = Column(Float, nullable=True)
     usage_hours = Column(Float, nullable=True)
+    period_days = Column(Integer, nullable=False, default=30, server_default="30")
     recorded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 

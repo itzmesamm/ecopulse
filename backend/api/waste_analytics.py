@@ -508,9 +508,15 @@ def get_dashboard_stats(
         models.WasteItem.org_id == org_id
     ).all()
 
-    billing_total = db.query(func.coalesce(func.sum(models.BillingRecord.cost), 0.0)).filter(
+    latest_billing_by_resource = {}
+    for record in db.query(models.BillingRecord).filter(
         models.BillingRecord.org_id == org_id
-    ).scalar() or 0.0
+    ).order_by(models.BillingRecord.recorded_at.desc()).all():
+        latest_billing_by_resource.setdefault(record.resource_id, record)
+    billing_total = sum(
+        float(record.cost or 0.0) * 30.0 / max(int(record.period_days or 30), 1)
+        for record in latest_billing_by_resource.values()
+    )
 
     if not waste_items:
         return DashboardStats(
@@ -556,7 +562,7 @@ def get_cost_trend(
     day = cast(models.BillingRecord.recorded_at, Date)
     trends = db.query(
         day.label("date"),
-        func.sum(models.BillingRecord.cost).label("total_cost"),
+        func.sum(models.BillingRecord.cost / models.BillingRecord.period_days).label("total_cost"),
     ).filter(
         models.BillingRecord.org_id == org_id,
         models.BillingRecord.recorded_at >= start_date,

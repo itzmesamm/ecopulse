@@ -1,9 +1,12 @@
 import json
+import math
+import os
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
 from backend.db import models
+from backend.genai.embeddings import embed_and_store_logs
 from backend.genai.rag_pipeline import generate_recommendation
 from backend.greenops.carbon_calc import (
     estimate_carbon_savings_kg_for_gpu_finding,
@@ -147,15 +150,29 @@ def _generate_ai_recommendations(
     if not context:
         return []
 
+    embeddings_enabled = os.getenv("EMBEDDINGS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    if embeddings_enabled:
+        try:
+            embed_and_store_logs(db, org_id)
+        except (RuntimeError, ValueError, ImportError):
+            pass
+
     recommendations = []
     for waste_finding in context:
+        generation_options = {}
         if user_question:
-            result = generate_recommendation(db, org_id, waste_finding, user_question=user_question)
-        else:
-            result = generate_recommendation(db, org_id, waste_finding)
+            generation_options["user_question"] = user_question
+        if embeddings_enabled:
+            generation_options["embeddings_ready"] = True
+        result = generate_recommendation(db, org_id, waste_finding, **generation_options)
         if result is None:
             recommendations.extend(_fallback_recommendations([waste_finding], org_id))
             continue
+        evidence_max = max(0.0, float(waste_finding.get("estimated_monthly_waste_usd") or 0.0))
+        model_savings = float(result.get("dollar_savings") or 0.0)
+        if not math.isfinite(model_savings):
+            model_savings = 0.0
+        model_savings = min(max(model_savings, 0.0), evidence_max)
         source_type = waste_finding.get("source_type") or "waste"
         recommendations.append(
             {
@@ -168,9 +185,9 @@ def _generate_ai_recommendations(
                 "rationale": result["explanation"],
                 "priority": "high" if waste_finding["severity_score"] >= 0.7 else "medium",
                 "confidence_score": result["confidence"],
-                "estimated_savings_usd": result["dollar_savings"],
+                "estimated_savings_usd": model_savings,
                 "explanation": result["explanation"],
-                "dollar_savings": result["dollar_savings"],
+                "dollar_savings": model_savings,
                 "suggested_action": result["suggested_action"],
                 "context_json": json.dumps(waste_finding),
             }

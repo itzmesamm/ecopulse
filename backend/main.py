@@ -36,6 +36,7 @@ if engine.dialect.name == "postgresql":
   with engine.begin() as connection:
     connection.execute(text("ALTER TABLE billing_records ADD COLUMN IF NOT EXISTS team VARCHAR"))
     connection.execute(text("ALTER TABLE billing_records ADD COLUMN IF NOT EXISTS owner VARCHAR"))
+    connection.execute(text("ALTER TABLE billing_records ADD COLUMN IF NOT EXISTS period_days INTEGER NOT NULL DEFAULT 30"))
     connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS waste_finding_id VARCHAR"))
     connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS explanation TEXT"))
     connection.execute(text("ALTER TABLE recommendations ADD COLUMN IF NOT EXISTS dollar_savings DOUBLE PRECISION DEFAULT 0"))

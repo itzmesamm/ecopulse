@@ -3,8 +3,9 @@
 AI-powered FinOps and GreenOps platform. This repo currently contains:
 
 - **Org / Auth foundation** — multi-tenant organizations, Supabase Auth-backed signup/login
-- **Layer 1 — Data Ingestion** — billing, GPU telemetry, Kubernetes metrics, operational logs
-  (synthetic data for now, tagged and persisted per-organization)
+- **Layer 1 — Data Ingestion** — a versioned, deterministic 30-day demo dataset for billing,
+  GPU telemetry, Kubernetes metrics, and operational logs, tagged and persisted per organization.
+  Billing samples carry their period length; demo records are daily and are not connected to a cloud account.
 
 Layers 2–5 include analytics, GenAI recommendations, dry-run remediation, and dashboards. Live remediation is currently limited to the guarded AWS EC2 stop workflow described below.
 
@@ -36,9 +37,9 @@ Layers 2–5 include analytics, GenAI recommendations, dry-run remediation, and 
 
    Fill in `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and a unique `CLOUD_CREDENTIALS_ENCRYPTION_KEY`. Generate the latter with:
 
-      ```
-      python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-      ```
+   ```
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
 
 4. **Create or update the database schema**
 
@@ -61,7 +62,7 @@ Layers 2–5 include analytics, GenAI recommendations, dry-run remediation, and 
 
 7. **Try it out**
    - `POST /auth/signup` with an email, password, and org_name → creates your org + admin user, returns `org_id`
-   - `POST /ingest?org_id=<that id>` → pulls synthetic Layer 1 data and persists it
+   - `POST /ingest?org_id=<that id>` → loads the idempotent `ecopulse-demo-v1` Layer 1 dataset
    - Check the Supabase Table Editor — `billing_records`, `gpu_metrics`, `k8s_metrics`, `operational_logs` should have rows
 
 ## AWS remediation

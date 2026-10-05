@@ -525,7 +525,7 @@ def test_generation_keeps_ai_results_when_one_finding_falls_back(monkeypatch):
     results = iter([
         {
             "explanation": "Model-grounded explanation.",
-            "dollar_savings": 80.0,
+            "dollar_savings": 800.0,
             "confidence": 0.9,
             "suggested_action": "Right-size this resource.",
         },
@@ -536,6 +536,8 @@ def test_generation_keeps_ai_results_when_one_finding_falls_back(monkeypatch):
     generated = recommendation_service._generate_ai_recommendations(None, "org-1", findings)
 
     assert generated[0]["summary"] == "Model-grounded explanation."
+    assert generated[0]["dollar_savings"] == 100.0
+    assert generated[0]["estimated_savings_usd"] == 100.0
     assert generated[1]["resource_id"] == "resource-fallback"
     assert "low utilization" in generated[1]["summary"]
 

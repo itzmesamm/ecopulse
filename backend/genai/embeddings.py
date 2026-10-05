@@ -40,28 +40,43 @@ def embed_and_store_logs(
     org_id: str,
     model: Optional[Any] = None,
 ) -> int:
-    """Embed each org log and upsert one vector row per operational log."""
+    """Batch-embed new or changed org logs and upsert their vector rows."""
     logs = db.query(models.OperationalLog).filter(models.OperationalLog.org_id == org_id).all()
-    stored = 0
-    for log in logs:
-        existing = db.query(models.LogEmbedding).filter(
-            models.LogEmbedding.org_id == org_id,
-            models.LogEmbedding.source_ref == log.id,
-        ).first()
-        vector = embed_text(log.message, model=model)
+    embeddings = db.query(models.LogEmbedding).filter(
+        models.LogEmbedding.org_id == org_id,
+    ).all()
+    by_source = {row.source_ref: row for row in embeddings if row.source_ref}
+    pending = [
+        log for log in logs
+        if log.id not in by_source or by_source[log.id].content != log.message
+    ]
+
+    if not pending:
+        return len(logs)
+
+    encoder = model or _get_model()
+    vectors = encoder.encode([log.message for log in pending])
+    if len(vectors) != len(pending):
+        raise ValueError("Embedding model returned a different number of vectors than inputs")
+
+    for log, vector in zip(pending, vectors):
+        values = vector.tolist() if hasattr(vector, "tolist") else list(vector)
+        if len(values) != 384:
+            raise ValueError(f"Expected 384 embedding dimensions, got {len(values)}")
+        values = [float(value) for value in values]
+        existing = by_source.get(log.id)
         if existing:
             existing.content = log.message
-            existing.embedding = vector
+            existing.embedding = values
         else:
             db.add(models.LogEmbedding(
                 org_id=org_id,
                 content=log.message,
-                embedding=vector,
+                embedding=values,
                 source_ref=log.id,
             ))
-        stored += 1
     db.commit()
-    return stored
+    return len(logs)
 
 
 def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:

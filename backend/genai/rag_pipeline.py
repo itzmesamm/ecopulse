@@ -27,16 +27,17 @@ def generate_recommendation(
     waste_finding: Dict[str, Any],
     model: Optional[Any] = None,
     user_question: Optional[str] = None,
+    embeddings_ready: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Retrieve relevant logs and ask Ollama for one grounded recommendation."""
     context_logs = []
     embeddings_enabled = os.getenv("EMBEDDINGS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if embeddings_enabled:
-        try:
-            embed_and_store_logs(db, org_id, model=model)
-        except (RuntimeError, ValueError, ImportError):
-            pass
-
+        if not embeddings_ready:
+            try:
+                embed_and_store_logs(db, org_id, model=model)
+            except (RuntimeError, ValueError, ImportError):
+                pass
         try:
             context_logs = retrieve_relevant_logs(
                 db,

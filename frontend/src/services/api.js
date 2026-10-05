@@ -74,12 +74,7 @@ async function fetchAPI(url, options = {}) {
 
 async function withFallback(fetcher, fallback) {
   if (USE_MOCK_DATA) return mockResolve(fallback);
-  try {
-    return await fetcher();
-  } catch (e) {
-    console.warn("API call failed, using mock data:", e.message);
-    return mockResolve(fallback);
-  }
+  return fetcher();
 }
 
 function formatUsd(amount) {
@@ -356,6 +351,13 @@ function transformCurrentUser(data) {
 }
 
 export const api = {
+  loadDemoData: async () => {
+    const orgId = encodeURIComponent(requireOrgId());
+    const ingestion = await fetchAPI(`${BASE_URL}/ingest?org_id=${orgId}`, { method: "POST" });
+    await fetchAPI(`${BASE_URL}/waste-analytics/analyze?org_id=${orgId}`, { method: "POST" });
+    return ingestion;
+  },
+
   getStatCards: () =>
     withFallback(async () => {
       const stats = await fetchAPI(

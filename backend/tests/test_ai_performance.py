@@ -83,3 +83,65 @@ def test_recommendation_skips_embedding_and_keeps_model_warm(monkeypatch):
     )
 
     assert result["explanation"] == "Model answer."
+
+
+def test_log_embeddings_batch_only_new_or_changed_logs(db_session):
+    from backend.genai.embeddings import embed_and_store_logs
+
+    org = models.Organization(name="Embedding Batch Test")
+    db_session.add(org)
+    db_session.flush()
+    logs = [
+        models.OperationalLog(org_id=org.id, source="test", message=f"log {index}")
+        for index in range(2)
+    ]
+    db_session.add_all(logs)
+    db_session.commit()
+
+    class CountingEncoder:
+        def __init__(self):
+            self.calls = []
+
+        def encode(self, texts):
+            self.calls.append(texts)
+            return [[1.0] * 384 for _ in texts]
+
+    encoder = CountingEncoder()
+
+    assert embed_and_store_logs(db_session, org.id, model=encoder) == 2
+    assert len(encoder.calls) == 1
+    assert len(encoder.calls[0]) == 2
+
+    assert embed_and_store_logs(db_session, org.id, model=encoder) == 2
+    assert len(encoder.calls) == 1
+
+    logs[0].message = "updated log"
+    db_session.commit()
+    assert embed_and_store_logs(db_session, org.id, model=encoder) == 2
+    assert len(encoder.calls) == 2
+    assert encoder.calls[1] == ["updated log"]
+
+
+def test_recommendation_batch_indexes_logs_once(monkeypatch):
+    from backend.services import recommendation_service
+
+    index_calls = []
+    monkeypatch.setenv("EMBEDDINGS_ENABLED", "true")
+    monkeypatch.setattr(
+        recommendation_service,
+        "embed_and_store_logs",
+        lambda db, org_id: index_calls.append((db, org_id)),
+    )
+    monkeypatch.setattr(
+        recommendation_service,
+        "generate_recommendation",
+        lambda *args, **kwargs: None,
+    )
+
+    recommendation_service._generate_ai_recommendations(
+        db=None,
+        org_id="org-1",
+        context=[{"resource_id": f"resource-{index}"} for index in range(4)],
+    )
+
+    assert index_calls == [(None, "org-1")]

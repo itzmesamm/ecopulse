@@ -203,6 +203,10 @@
 .dry-run-note { color: var(--text-2); font-size: 12px; }
 .workflow-message { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--card-border); border-radius: var(--r-sm); background: var(--surface-alt); color: var(--teal); font-size: 12.5px; overflow-wrap: anywhere; }
 .workflow-message.error { color: var(--red); }
+.demo-data-banner { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 9px 11px; border: 1px solid var(--card-border); border-radius: var(--r-sm); background: var(--surface-alt); color: var(--text-2); font-size: 12px; }
+.demo-data-banner svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--teal); }
+.selects .btn { min-height: 36px; padding: 7px 10px; font-size: 12px; }
+.selects .btn svg { width: 15px; height: 15px; }
 .workflow-empty { margin: 18px 0; color: var(--text-2); font-size: 13px; line-height: 1.5; }
 .approval-hint { align-self: center; color: var(--text-2); font-size: 12px; }
 
