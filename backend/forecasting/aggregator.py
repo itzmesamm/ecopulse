@@ -32,6 +32,14 @@ class DailyCostAggregate:
     resource_count: int
 
 
+def _as_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
 # ============================================================================
 # Aggregation Functions
 # ============================================================================
@@ -87,7 +95,7 @@ def aggregate_daily_costs(
         models.BillingRecord.service,
         models.BillingRecord.environment,
         models.BillingRecord.region,
-        func.sum(models.BillingRecord.cost).label('total_cost'),
+        func.sum(models.BillingRecord.cost / models.BillingRecord.period_days).label('total_cost'),
         func.count(models.BillingRecord.id).label('resource_count'),
     ).group_by(
         models.BillingRecord.service,
@@ -121,46 +129,50 @@ def aggregate_daily_costs_range(
     environment: Optional[str] = None,
     region: Optional[str] = None,
 ) -> List[DailyCostAggregate]:
-    """
-    Aggregate billing records for a date range and organization.
-    
-    Calls aggregate_daily_costs for each day in the range and returns
-    combined results.
-    
-    Parameters:
-        db: SQLAlchemy database session
-        org_id: Organization ID (mandatory)
-        start_date: Start date (inclusive)
-        end_date: End date (inclusive)
-        service: Optional filter by service
-        environment: Optional filter by environment
-        region: Optional filter by region
-    
-    Returns:
-        List of DailyCostAggregate objects for all days in range
-    
-    Example:
-        >>> aggs = aggregate_daily_costs_range(
-        ...     db, 'org-123', date(2024, 8, 1), date(2024, 8, 31)
-        ... )
-        >>> len(aggs)  # Could be hundreds (31 days × multiple dimensions)
-        342
-    """
+    """Aggregate a date range using one database query."""
+    if end_date < start_date:
+        return []
+
+    cost_day = func.date(models.BillingRecord.recorded_at)
+    period_days = func.coalesce(func.nullif(models.BillingRecord.period_days, 0), 30)
+    query = db.query(
+        cost_day.label("cost_date"),
+        models.BillingRecord.service,
+        models.BillingRecord.environment,
+        models.BillingRecord.region,
+        func.sum(models.BillingRecord.cost / period_days).label("total_cost"),
+        func.count(models.BillingRecord.id).label("resource_count"),
+    ).filter(
+        models.BillingRecord.org_id == org_id,
+        cost_day >= start_date,
+        cost_day <= end_date,
+    )
+
+    if service:
+        query = query.filter(models.BillingRecord.service == service)
+    if environment:
+        query = query.filter(models.BillingRecord.environment == environment)
+    if region:
+        query = query.filter(models.BillingRecord.region == region)
+
+    rows = query.group_by(
+        cost_day,
+        models.BillingRecord.service,
+        models.BillingRecord.environment,
+        models.BillingRecord.region,
+    ).all()
+
     aggregates = []
-    current_date = start_date
-    
-    while current_date <= end_date:
-        daily_aggs = aggregate_daily_costs(
-            db,
-            org_id,
-            current_date,
-            service=service,
-            environment=environment,
-            region=region,
-        )
-        aggregates.extend(daily_aggs)
-        current_date += timedelta(days=1)
-    
+    for row in rows:
+        aggregates.append(DailyCostAggregate(
+            org_id=org_id,
+            cost_date=_as_date(row.cost_date),
+            service=row.service,
+            environment=row.environment,
+            region=row.region,
+            total_cost_usd=round(float(row.total_cost or 0.0), 2),
+            resource_count=int(row.resource_count or 0),
+        ))
     return aggregates
 
 
@@ -249,7 +261,7 @@ def get_latest_cost_date(db: Session, org_id: str) -> Optional[date]:
         models.BillingRecord.org_id == org_id
     ).first()
     
-    return result.latest_date if result and result.latest_date else None
+    return _as_date(result.latest_date) if result and result.latest_date else None
 
 
 def get_date_range_with_data(db: Session, org_id: str) -> tuple[Optional[date], Optional[date]]:
@@ -278,5 +290,5 @@ def get_date_range_with_data(db: Session, org_id: str) -> tuple[Optional[date], 
     ).first()
     
     if result and result.earliest and result.latest:
-        return result.earliest, result.latest
+        return _as_date(result.earliest), _as_date(result.latest)
     return None, None

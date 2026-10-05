@@ -68,6 +68,8 @@ def estimate_carbon_savings_kg_for_waste_item(
 
     waste_type = waste_item.waste_type
     usage_hours = float(billing.usage_hours or 0.0)
+    period_days = max(float(getattr(billing, "period_days", 30) or 30), 1.0)
+    monthly_usage_hours = usage_hours * 30.0 / period_days
     region = billing.region or waste_item.region or "us-east-1"
     intensity = CARBON_INTENSITY_KG_PER_KWH.get(region, 0.4)
 
@@ -80,7 +82,7 @@ def estimate_carbon_savings_kg_for_waste_item(
         return None
 
     # How many monthly hours we assume can be avoided.
-    hours_saved = max(0.0, threshold_hours - usage_hours)
+    hours_saved = max(0.0, threshold_hours - monthly_usage_hours)
     if hours_saved <= 0:
         return 0.0
 

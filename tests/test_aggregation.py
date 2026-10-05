@@ -110,8 +110,6 @@ class TestAggregateDailyCosts:
         mock_query.filter.return_value = mock_query
         mock_query.with_entities.return_value = mock_query
         mock_query.group_by.return_value = mock_query
-        mock_query.all.return_value = [result_row]
-        
         # Call aggregation
         aggs = aggregate_daily_costs(
             mock_db,
@@ -400,24 +398,25 @@ class TestAggregateDailyCostsRange:
     """Test the aggregate_daily_costs_range function."""
     
     def test_date_range_aggregation_works(self):
-        """Test that date range aggregation calls single-day aggregation."""
+        """Test grouped date-range aggregation returns each source date."""
         mock_db = MagicMock(spec=Session)
-        
-        # Create mock results for 3 days
-        day1_result = MagicMock()
-        day1_result.service = "ec2"
-        day1_result.environment = "production"
-        day1_result.region = "us-east-1"
-        day1_result.total_cost = 100.0
-        day1_result.resource_count = 1
-        
+
+        rows = []
+        for day_number in (18, 19, 20):
+            row = MagicMock()
+            row.cost_date = f"2024-08-{day_number}"
+            row.service = "ec2"
+            row.environment = "production"
+            row.region = "us-east-1"
+            row.total_cost = 100.0
+            row.resource_count = 1
+            rows.append(row)
+
         mock_query = mock_db.query.return_value
         mock_query.filter.return_value = mock_query
-        mock_query.with_entities.return_value = mock_query
         mock_query.group_by.return_value = mock_query
-        mock_query.all.return_value = [day1_result]
-        
-        # Call with 3-day range
+        mock_query.all.return_value = rows
+
         aggs = aggregate_daily_costs_range(
             mock_db,
             "org-123",
@@ -425,14 +424,15 @@ class TestAggregateDailyCostsRange:
             date(2024, 8, 20),
         )
         
-        # Should have results for 3 days (mock returns 1 result per day)
         assert len(aggs) == 3
+        mock_db.query.assert_called_once()
     
     def test_single_day_range(self):
         """Test date range aggregation with same start and end date."""
         mock_db = MagicMock(spec=Session)
         
         result_row = MagicMock()
+        result_row.cost_date = "2024-08-18"
         result_row.service = "ec2"
         result_row.environment = "production"
         result_row.region = "us-east-1"
@@ -441,7 +441,6 @@ class TestAggregateDailyCostsRange:
         
         mock_query = mock_db.query.return_value
         mock_query.filter.return_value = mock_query
-        mock_query.with_entities.return_value = mock_query
         mock_query.group_by.return_value = mock_query
         mock_query.all.return_value = [result_row]
         
@@ -461,6 +460,7 @@ class TestAggregateDailyCostsRange:
         mock_db = MagicMock(spec=Session)
         
         result_row = MagicMock()
+        result_row.cost_date = "2024-08-18"
         result_row.service = "ec2"
         result_row.environment = "production"
         result_row.region = "us-east-1"
@@ -469,7 +469,6 @@ class TestAggregateDailyCostsRange:
         
         mock_query = mock_db.query.return_value
         mock_query.filter.return_value = mock_query
-        mock_query.with_entities.return_value = mock_query
         mock_query.group_by.return_value = mock_query
         mock_query.all.return_value = [result_row]
         
@@ -484,7 +483,7 @@ class TestAggregateDailyCostsRange:
         )
         
         # Should still return filtered results
-        assert len(aggs) == 3
+        assert len(aggs) == 1
         for agg in aggs:
             assert agg.service == "ec2"
             assert agg.environment == "production"
@@ -510,23 +509,26 @@ class TestAggregateDailyCostsRange:
         # Should have empty results for 3 days
         assert aggs == []
     
-    def test_dates_increment_correctly(self):
-        """Test that dates increment by 1 day each iteration."""
+    def test_dates_are_taken_from_grouped_rows(self):
+        """Test that returned dates come from the grouped query results."""
         mock_db = MagicMock(spec=Session)
-        
-        result_row = MagicMock()
-        result_row.service = "ec2"
-        result_row.environment = "production"
-        result_row.region = "us-east-1"
-        result_row.total_cost = 100.0
-        result_row.resource_count = 1
-        
+
+        rows = []
+        for day_number in (18, 19, 20):
+            row = MagicMock()
+            row.cost_date = f"2024-08-{day_number}"
+            row.service = "ec2"
+            row.environment = "production"
+            row.region = "us-east-1"
+            row.total_cost = 100.0
+            row.resource_count = 1
+            rows.append(row)
+
         mock_query = mock_db.query.return_value
         mock_query.filter.return_value = mock_query
-        mock_query.with_entities.return_value = mock_query
         mock_query.group_by.return_value = mock_query
-        mock_query.all.return_value = [result_row]
-        
+        mock_query.all.return_value = rows
+
         start_date = date(2024, 8, 18)
         end_date = date(2024, 8, 20)
         
@@ -537,7 +539,6 @@ class TestAggregateDailyCostsRange:
             end_date,
         )
         
-        # Verify cost_dates increment correctly
         assert aggs[0].cost_date == date(2024, 8, 18)
         assert aggs[1].cost_date == date(2024, 8, 19)
         assert aggs[2].cost_date == date(2024, 8, 20)

@@ -8,7 +8,9 @@ Never invent numbers, resources, causes, or savings not present in the context.
 Always return one JSON object with exactly these keys:
 explanation, dollar_savings, confidence, suggested_action.
 confidence must be a number from 0 to 1.
-dollar_savings must be a non-negative number.
+dollar_savings must be a non-negative number no greater than the finding's estimated monthly waste.
+Do not claim that an action was executed or that a saving is guaranteed.
+If the evidence is insufficient, recommend manual review and use low confidence.
 Return JSON only, with no markdown or extra text."""
 
 

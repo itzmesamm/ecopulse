@@ -12,6 +12,7 @@ Key heuristics:
 All thresholds and waste percentages are configurable via strategy constants.
 """
 from dataclasses import dataclass
+import datetime
 from typing import Optional, List
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,30 @@ def _ensure_positive(value: float) -> float:
     return value
 
 
+def _monthly_value(record: models.BillingRecord, value: float) -> float:
+    """Normalize a period-valued billing field to a 30-day estimate."""
+    try:
+        period_days = float(getattr(record, "period_days", 30) or 30)
+    except (TypeError, ValueError):
+        period_days = 30.0
+    if period_days <= 0:
+        period_days = 30.0
+    return float(value) * 30.0 / period_days
+
+
+def _latest_billing_records(db: Session, org_id: str) -> dict[str, models.BillingRecord]:
+    latest = {}
+    for record in db.query(models.BillingRecord).filter(
+        models.BillingRecord.org_id == org_id
+    ).all():
+        previous = latest.get(record.resource_id)
+        if previous is None or (record.recorded_at or datetime.datetime.min) > (
+            previous.recorded_at or datetime.datetime.min
+        ):
+            latest[record.resource_id] = record
+    return latest
+
+
 class WasteAnalyzer:
     """
     Modular waste analyzer. Pluggable strategies for different waste detection methods.
@@ -65,7 +90,7 @@ class WasteAnalyzer:
         Returns the highest-severity result, or None if no waste detected.
         Ensures returned values are never negative.
         """
-        if not billing_record.cost or not billing_record.usage_hours:
+        if billing_record.cost is None or billing_record.usage_hours is None:
             return None
         
         results = []
@@ -87,12 +112,8 @@ class WasteAnalyzer:
         """
         # Get all billing records for this org (latest batch)
         # In production, you'd filter by date range or fetch only recent records
-        records = db.query(models.BillingRecord).filter(
-            models.BillingRecord.org_id == org_id
-        ).all()
-        
         results = []
-        for record in records:
+        for record in _latest_billing_records(db, org_id).values():
             result = self.analyze_record(record)
             if result:
                 results.append(result)
@@ -136,22 +157,25 @@ class LowUtilizationStrategy(WasteDetectionStrategy):
     def detect(self, billing_record: models.BillingRecord) -> Optional[WasteAnalysisResult]:
         if billing_record.usage_hours is None or billing_record.cost is None:
             return None
+
+        monthly_usage_hours = _monthly_value(billing_record, billing_record.usage_hours)
+        monthly_cost = _monthly_value(billing_record, billing_record.cost)
         
         # Skip if resource is being used normally
-        if billing_record.usage_hours >= self.USAGE_THRESHOLD_HOURS:
+        if monthly_usage_hours >= self.USAGE_THRESHOLD_HOURS:
             return None
         
         # Calculate severity: how far below threshold
         # severity = 1.0 - (0.5 hours / 3.0 hours) = 0.833...
         if self.USAGE_THRESHOLD_HOURS > 0:
-            severity = 1.0 - (billing_record.usage_hours / self.USAGE_THRESHOLD_HOURS)
+            severity = 1.0 - (monthly_usage_hours / self.USAGE_THRESHOLD_HOURS)
         else:
             severity = 1.0
         
         severity = _clamp_score(severity)
         
         # Estimated waste: percentage of cost
-        estimated_waste = billing_record.cost * self.WASTE_PERCENTAGE
+        estimated_waste = monthly_cost * self.WASTE_PERCENTAGE
         estimated_waste = _ensure_positive(estimated_waste)
         
         # Skip if waste is negligible
@@ -163,7 +187,7 @@ class LowUtilizationStrategy(WasteDetectionStrategy):
             waste_type="low_utilization",
             severity_score=round(severity, 3),
             estimated_monthly_waste_usd=round(estimated_waste, 2),
-            details=f"Resource used only {billing_record.usage_hours:.1f} hours/month; likely idle. "
+            details=f"Resource used only {monthly_usage_hours:.1f} hours/month; likely idle. "
                     f"Estimated waste: ${estimated_waste:.2f}/month ({self.WASTE_PERCENTAGE*100:.0f}% of cost).",
         )
 
@@ -193,16 +217,19 @@ class HighCostLowUsageStrategy(WasteDetectionStrategy):
     def detect(self, billing_record: models.BillingRecord) -> Optional[WasteAnalysisResult]:
         if billing_record.usage_hours is None or billing_record.cost is None:
             return None
+
+        monthly_usage_hours = _monthly_value(billing_record, billing_record.usage_hours)
+        monthly_cost = _monthly_value(billing_record, billing_record.cost)
         
         # Avoid division by zero
-        if billing_record.usage_hours == 0:
+        if monthly_usage_hours == 0:
             return None
         
-        cost_per_hour = billing_record.cost / billing_record.usage_hours
+        cost_per_hour = monthly_cost / monthly_usage_hours
         
         # Both conditions must be true: high cost/hour AND low total usage
         if not (cost_per_hour > self.COST_PER_HOUR_THRESHOLD and 
-                billing_record.usage_hours < self.USAGE_THRESHOLD_HOURS):
+                monthly_usage_hours < self.USAGE_THRESHOLD_HOURS):
             return None
         
         # Severity: normalized by max threshold
@@ -217,7 +244,7 @@ class HighCostLowUsageStrategy(WasteDetectionStrategy):
         severity = _clamp_score(severity)
         
         # Estimated waste
-        estimated_waste = billing_record.cost * self.WASTE_PERCENTAGE
+        estimated_waste = monthly_cost * self.WASTE_PERCENTAGE
         estimated_waste = _ensure_positive(estimated_waste)
         
         # Skip if waste is negligible
@@ -229,7 +256,7 @@ class HighCostLowUsageStrategy(WasteDetectionStrategy):
             waste_type="high_cost_low_usage",
             severity_score=round(severity, 3),
             estimated_monthly_waste_usd=round(estimated_waste, 2),
-            details=f"High cost (${cost_per_hour:.2f}/hr) despite low usage ({billing_record.usage_hours:.1f} hrs/month). "
+            details=f"High cost (${cost_per_hour:.2f}/hr) despite low usage ({monthly_usage_hours:.1f} hrs/month). "
                     f"Estimated waste: ${estimated_waste:.2f}/month ({self.WASTE_PERCENTAGE*100:.0f}% of cost). "
                     f"Consider right-sizing or using spot instances.",
         )
@@ -249,12 +276,7 @@ def persist_waste_items(db: Session, org_id: str, waste_results: list[WasteAnaly
         models.WasteItem.org_id == org_id
     ).delete(synchronize_session=False)
 
-    billing_records = {
-        r.resource_id: r
-        for r in db.query(models.BillingRecord).filter(
-            models.BillingRecord.org_id == org_id
-        ).all()
-    }
+    billing_records = _latest_billing_records(db, org_id)
 
     count = 0
     for result in waste_results:
